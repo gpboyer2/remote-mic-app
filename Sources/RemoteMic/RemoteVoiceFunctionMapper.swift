@@ -32,11 +32,12 @@ struct HIDUsageMapping: Equatable {
 
 enum RemoteVoiceFunctionMappingPolicy {
     // RC003 exposes its microphone button as keyboard F5 (usage page 7,
-    // usage 0x3e). macOS represents the laptop Fn/Globe key as the Apple
-    // vendor top-case usage (usage page 0xff, usage 3).
+    // usage 0x3e). We remap it to Right Control (usage page 7, usage 0xe4)
+    // so that pressing the voice button triggers the same key that
+    // Doubao Input Method is configured to listen to on this machine.
     static let remoteVoiceKey = HIDUsageMapping(
         source: 0x0000_0007_0000_003E,
-        destination: 0x0000_00FF_0000_0003
+        destination: 0x0000_0007_0000_00E4
     )
 
     static func applying(to existing: [HIDUsageMapping]) -> [HIDUsageMapping] {

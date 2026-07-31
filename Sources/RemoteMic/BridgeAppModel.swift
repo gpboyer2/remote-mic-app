@@ -526,12 +526,8 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
             "VOICE RIGHT_CTRL HARDWARE \(shouldHold ? "DOWN" : "UP") " +
                 "mapping=\(voiceFunctionMapper.isApplied)"
         )
-        // 主动 post 右侧 Control 独立按键事件让豆包输入法听见。
-        // 豆包"右 Control"语音模式需要两次独立按键（double-tap）才能触发，
-        // 无论按下还是松开都各发一次 double-tap 以确保可靠触发。
-        KeyboardInjector.postRightControlTap()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            KeyboardInjector.postRightControlTap()
-        }
+        // HID 映射已将遥控器语音键直接映射为右侧 Control（0x000700E4），
+        // 遥控器物理按键按下时系统会原生产生右侧 Control 事件，
+        // 豆包输入法可直接捕获，无需额外 postRightControlTap()。
     }
 }
