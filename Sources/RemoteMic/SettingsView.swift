@@ -78,7 +78,7 @@ struct SettingsView: View {
     @State private var inputMonitoringGranted = HIDRemoteMonitor.isInputMonitoringGranted
     @State private var accessibilityGranted = KeyboardInjector.isAccessibilityTrusted
     @State private var configurationStatus: ConfigurationStatus?
-    @Namespace private var navigationGlassNamespace
+    // macOS 26 Glass namespace replaced
 
     init(
         model: BridgeAppModel,
@@ -94,7 +94,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: .constant(.all)) {
             sidebar
-                .toolbar(removing: .sidebarToggle)
                 .navigationSplitViewColumnWidth(min: 96, ideal: 108, max: 120)
         } detail: {
             selectedPage
@@ -125,7 +124,7 @@ struct SettingsView: View {
     }
 
     private var sidebar: some View {
-        GlassEffectContainer(spacing: 10) {
+        VStack(spacing: 10) {
             VStack(spacing: 10) {
                 ForEach(SettingsSection.allCases) { section in
                     sidebarButton(section)
@@ -133,6 +132,7 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
             .padding(10)
+            .background(Color.black.opacity(0.06))
         }
     }
 
@@ -153,8 +153,7 @@ struct SettingsView: View {
         .buttonStyle(.plain)
         .modifier(
             SidebarGlassModifier(
-                isSelected: selectedSection == section,
-                namespace: navigationGlassNamespace
+                isSelected: selectedSection == section
             )
         )
         .accessibilityAddTraits(selectedSection == section ? .isSelected : [])
@@ -182,7 +181,7 @@ struct SettingsView: View {
                     subtitle: localization.text("连接 RC003，并配置语音输出与触发方式")
                 )
 
-                GlassEffectContainer(spacing: 14) {
+                VStack(spacing: 14) {
                     HStack(alignment: .top, spacing: 14) {
                         connectionDevicePanel
                             .frame(width: 196)
@@ -190,15 +189,19 @@ struct SettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
                 }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(Color.black.opacity(0.04))
+                )
             }
             .padding(22)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
     }
 
     private var connectionDevicePanel: some View {
-        GlassPanel {
+        VStack {
             VStack(spacing: 14) {
                 VStack(spacing: 2) {
                     Text("RC003")
@@ -241,17 +244,15 @@ struct SettingsView: View {
                     model.reconnect()
                 } label: {
                     Text("立即重新连接")
-                        .foregroundStyle(.white)
                 }
-                    .buttonStyle(.glassProminent)
-                    .buttonBorderShape(.roundedRectangle(radius: 10))
+                    .buttonStyle(.borderedProminent)
                     .frame(maxWidth: .infinity)
             }
         }
     }
 
     private var audioSettingsPanel: some View {
-        GlassPanel {
+        VStack {
             VStack(alignment: .leading, spacing: 13) {
                 Text("音频设置")
                     .font(.headline)
@@ -309,13 +310,12 @@ struct SettingsView: View {
                         model.refreshAudioDevices()
                     } label: {
                         Text("刷新音频设备")
-                            .foregroundStyle(.white)
                     }
-                        .buttonStyle(.glassProminent)
+                        .buttonStyle(.borderedProminent)
                     Link("获取 BlackHole", destination: URL(string: "https://existential.audio/blackhole/")!)
-                        .buttonStyle(.glass)
+                        .buttonStyle(.borderedProminent)
                     Button("发送 1 秒测试音") { model.sendTestTone() }
-                        .buttonStyle(.glass)
+                        .buttonStyle(.borderedProminent)
                         .disabled(!model.canSendTestTone)
                 }
 
@@ -323,43 +323,45 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                HStack {
-                    Text(model.testToneStatus.text(using: localization))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-
-                Divider()
-
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("豆包输入法兼容")
-                            .font(.headline)
-                        Text("兼容虚拟麦克风")
+                Group {
+                    HStack {
+                        Text(model.testToneStatus.text(using: localization))
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Spacer()
                     }
-                    Spacer(minLength: 20)
-                    Text(model.doubaoAudioStatus.text(using: localization))
+
+                    Divider()
+
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("豆包输入法兼容")
+                                .font(.headline)
+                            Text("兼容虚拟麦克风")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 20)
+                        Text(model.doubaoAudioStatus.text(using: localization))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("选择 \(model.doubaoAudioDeviceName)") { model.selectDoubaoAudioDevice() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.hasDoubaoAudioDevice)
+                        Button("打开驱动安装说明") {
+                            model.openDoubaoDriverInstructions(using: localization)
+                        }
+                            .buttonStyle(.borderedProminent)
+                    }
+
+                    Text("豆包兼容 MiRemoteV 2ch、BlackHole 2ch 或 OrayVirtualAudioDevice。已检测到上方设备时可直接选择；否则请先安装 BlackHole 2ch 驱动。")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                HStack(spacing: 10) {
-                    Button("选择 MiRemoteV 2ch") { model.selectDoubaoAudioDevice() }
-                        .buttonStyle(.glass)
-                        .disabled(!model.hasDoubaoAudioDevice)
-                    Button("打开驱动安装说明") {
-                        model.openDoubaoDriverInstructions(using: localization)
-                    }
-                        .buttonStyle(.glass)
-                }
-
-                Text("豆包会过滤普通 virtual transport 音频设备。安装独立的 MiRemoteV 2ch 后在这里选中；原 BlackHole 不会被修改或替换。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -371,7 +373,7 @@ struct SettingsView: View {
                 subtitle: localization.text("自定义 RC003 按键功能，并保留语音键的固定核心行为")
             )
 
-            GlassPanel {
+            VStack {
                 HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("启用 RC003 自定义按键映射", isOn: Binding(
@@ -394,13 +396,13 @@ struct SettingsView: View {
                         settings.resetBindings()
                         selectedRemoteButton = .ok
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.borderedProminent)
                 }
             }
 
-            GlassEffectContainer(spacing: 14) {
+            VStack(spacing: 14) {
                 HStack(alignment: .top, spacing: 14) {
-                    GlassPanel {
+                    VStack {
                         RemoteControlDiagram(
                             selectedButton: $selectedRemoteButton,
                             activeButtons: model.activeRemoteButtons,
@@ -414,7 +416,7 @@ struct SettingsView: View {
                     }
                     .frame(width: 206)
 
-                    GlassPanel {
+                    VStack {
                         VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("按键动作")
@@ -539,9 +541,9 @@ struct SettingsView: View {
 
         if selected {
             content
-                .glassEffect(
-                    .clear.tint(Color.accentColor.opacity(0.10)).interactive(),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.15))
                 )
         } else {
             VStack(spacing: 0) {
@@ -656,8 +658,8 @@ struct SettingsView: View {
                     subtitle: localization.text("按顺序完成权限设置，确保 RC003 正常连接和发送按键")
                 )
 
-                GlassEffectContainer(spacing: 14) {
-                    GlassPanel {
+                VStack(spacing: 14) {
+                    VStack {
                         VStack(alignment: .leading, spacing: 0) {
                             Text("所需权限")
                                 .font(.headline)
@@ -704,7 +706,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    GlassPanel {
+                    VStack {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("诊断")
                                 .font(.headline)
@@ -713,9 +715,9 @@ struct SettingsView: View {
                                     .font(.title3)
                                     .foregroundStyle(Color.accentColor)
                                     .frame(width: 34, height: 34)
-                                    .glassEffect(
-                                        .clear.tint(Color.accentColor.opacity(0.14)),
-                                        in: Circle()
+                                    .background(
+                                        Circle()
+                                            .fill(Color.accentColor.opacity(0.25))
                                     )
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("应用日志")
@@ -725,7 +727,7 @@ struct SettingsView: View {
                                 }
                                 Spacer()
                                 Button("在 Finder 中显示日志") { model.openLogFolder() }
-                                    .buttonStyle(.glass)
+                                    .buttonStyle(.borderedProminent)
                             }
                         }
                     }
@@ -734,7 +736,6 @@ struct SettingsView: View {
             .padding(22)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
     }
 
     private var aboutPage: some View {
@@ -745,9 +746,9 @@ struct SettingsView: View {
                     subtitle: localization.text("你的无线语音工作台，配置、统计与隐私一目了然")
                 )
 
-                GlassEffectContainer(spacing: 14) {
+                VStack(spacing: 14) {
                     VStack(spacing: 14) {
-                        GlassPanel {
+                        VStack {
                             HStack(spacing: 20) {
                                 Image(nsImage: NSApp.applicationIconImage)
                                     .resizable()
@@ -775,14 +776,14 @@ struct SettingsView: View {
                                     .font(.system(size: 42, weight: .medium))
                                     .foregroundStyle(Color.accentColor)
                                     .frame(width: 76, height: 76)
-                                    .glassEffect(
-                                        .clear.tint(Color.accentColor.opacity(0.12)),
-                                        in: Circle()
+                                    .background(
+                                        Circle()
+                                            .fill(Color.accentColor.opacity(0.25))
                                     )
                             }
                         }
 
-                        GlassPanel {
+                        VStack {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack(alignment: .firstTextBaseline) {
                                     VStack(alignment: .leading, spacing: 3) {
@@ -818,7 +819,7 @@ struct SettingsView: View {
                             }
                         }
 
-                        GlassPanel {
+                        VStack {
                             VStack(alignment: .leading, spacing: 14) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
@@ -838,12 +839,12 @@ struct SettingsView: View {
                                     Button(action: exportConfiguration) {
                                         Label("导出配置…", systemImage: "square.and.arrow.up")
                                     }
-                                    .buttonStyle(.glassProminent)
+                                    .buttonStyle(.borderedProminent)
 
                                     Button(action: importConfiguration) {
                                         Label("导入配置…", systemImage: "square.and.arrow.down")
                                     }
-                                    .buttonStyle(.glass)
+                                    .buttonStyle(.borderedProminent)
 
                                     Spacer()
 
@@ -860,7 +861,7 @@ struct SettingsView: View {
                         }
 
                         HStack(alignment: .top, spacing: 14) {
-                            GlassPanel {
+                            VStack {
                                 VStack(alignment: .leading, spacing: 14) {
                                     Text("应用偏好")
                                         .font(.headline)
@@ -898,7 +899,7 @@ struct SettingsView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .top)
 
-                            GlassPanel {
+                            VStack {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Text("更新与支持")
                                         .font(.headline)
@@ -907,7 +908,7 @@ struct SettingsView: View {
                                         Label("检查更新…", systemImage: "arrow.triangle.2.circlepath")
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                    .buttonStyle(.glassProminent)
+                                    .buttonStyle(.borderedProminent)
 
                                     Link(
                                         destination: URL(string: "https://github.com/HD838A/remote-mic-app")!
@@ -915,7 +916,7 @@ struct SettingsView: View {
                                         Label("GitHub", systemImage: "link")
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                    .buttonStyle(.glass)
+                                    .buttonStyle(.borderedProminent)
 
                                     Button {
                                         NSApp.terminate(nil)
@@ -923,7 +924,7 @@ struct SettingsView: View {
                                         Label("退出", systemImage: "power")
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }
-                                    .buttonStyle(.glass)
+                                    .buttonStyle(.borderedProminent)
                                 }
                             }
                             .frame(width: 210, alignment: .top)
@@ -934,7 +935,6 @@ struct SettingsView: View {
             .padding(22)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
     }
 
     private var versionText: String {
@@ -1075,9 +1075,9 @@ struct SettingsView: View {
                 .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 42, height: 42)
-                .glassEffect(
-                    .clear.tint(Color.accentColor.opacity(0.14)),
-                    in: Circle()
+                .background(
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.25))
                 )
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1092,7 +1092,7 @@ struct SettingsView: View {
             Spacer(minLength: 16)
             StatusPill(text: state.title(using: localization), tint: state.tint)
             Button(actionTitle, action: action)
-                .buttonStyle(.glass)
+                .buttonStyle(.borderedProminent)
                 .frame(width: 112)
         }
         .padding(.vertical, 12)
@@ -1266,21 +1266,19 @@ private final class ShortcutCaptureNSView: NSView {
 
 private struct SidebarGlassModifier: ViewModifier {
     let isSelected: Bool
-    let namespace: Namespace.ID
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if isSelected {
             content
                 .foregroundStyle(Color.accentColor)
-                .glassEffect(
-                    .clear.tint(Color.accentColor.opacity(0.08)).interactive(),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.15))
                 )
-                .glassEffectID("settings-navigation-selection", in: namespace)
         } else {
             content
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
         }
     }
 }
@@ -1310,9 +1308,9 @@ private struct GlassPanel<Content: View>: View {
     var body: some View {
         content
             .padding(16)
-            .glassEffect(
-                .regular,
-                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(Color.black.opacity(0.04))
             )
     }
 }
@@ -1329,7 +1327,7 @@ private struct UsageStatisticCard: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 44, height: 44)
-                .glassEffect(.clear.tint(tint.opacity(0.14)), in: Circle())
+                .background(Circle().fill(tint.opacity(0.25)))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -1345,9 +1343,9 @@ private struct UsageStatisticCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(
-            .clear.tint(tint.opacity(0.08)),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(tint.opacity(0.15))
         )
     }
 }
@@ -1386,7 +1384,7 @@ private struct StatusPill: View {
             .foregroundStyle(tint)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .glassEffect(.clear.tint(tint.opacity(0.14)), in: Capsule())
+            .background(Capsule().fill(tint.opacity(0.25)))
     }
 }
 
@@ -1403,7 +1401,7 @@ private struct DeviceStatusStep: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 28, height: 28)
-                .glassEffect(.clear.tint(tint.opacity(0.14)), in: Circle())
+                .background(Circle().fill(tint.opacity(0.25)))
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(title)
@@ -1464,21 +1462,27 @@ private struct RemoteControlDiagram: View {
                 RC003Photo()
                     .frame(width: canvasSize.width, height: canvasSize.height)
 
-                hotspot(.power, x: 0.386, y: 0.099, width: 0.15, height: 0.072)
-                voiceHotspot(x: 0.630, y: 0.099, width: 0.15, height: 0.072)
+                Group {
+                    hotspot(.power, x: 0.386, y: 0.099, width: 0.15, height: 0.072)
+                    voiceHotspot(x: 0.630, y: 0.099, width: 0.15, height: 0.072)
 
-                hotspot(.up, x: 0.502, y: 0.179, width: 0.18, height: 0.065)
-                hotspot(.left, x: 0.362, y: 0.246, width: 0.15, height: 0.080)
-                hotspot(.ok, x: 0.502, y: 0.246, width: 0.19, height: 0.095)
-                hotspot(.right, x: 0.638, y: 0.246, width: 0.15, height: 0.080)
-                hotspot(.down, x: 0.502, y: 0.317, width: 0.18, height: 0.065)
+                    hotspot(.up, x: 0.502, y: 0.179, width: 0.18, height: 0.065)
+                    hotspot(.left, x: 0.362, y: 0.246, width: 0.15, height: 0.080)
+                    hotspot(.ok, x: 0.502, y: 0.246, width: 0.19, height: 0.095)
+                }
+                Group {
+                    hotspot(.right, x: 0.638, y: 0.246, width: 0.15, height: 0.080)
+                    hotspot(.down, x: 0.502, y: 0.317, width: 0.18, height: 0.065)
 
-                hotspot(.back, x: 0.406, y: 0.389, width: 0.17, height: 0.080)
-                hotspot(.volumeUp, x: 0.604, y: 0.390, width: 0.16, height: 0.080)
-                hotspot(.home, x: 0.406, y: 0.479, width: 0.17, height: 0.080)
-                hotspot(.volumeDown, x: 0.604, y: 0.480, width: 0.16, height: 0.080)
-                hotspot(.menu, x: 0.406, y: 0.569, width: 0.17, height: 0.080)
-                hotspot(.tv, x: 0.604, y: 0.569, width: 0.17, height: 0.080)
+                    hotspot(.back, x: 0.406, y: 0.389, width: 0.17, height: 0.080)
+                    hotspot(.volumeUp, x: 0.604, y: 0.390, width: 0.16, height: 0.080)
+                    hotspot(.home, x: 0.406, y: 0.479, width: 0.17, height: 0.080)
+                }
+                Group {
+                    hotspot(.volumeDown, x: 0.604, y: 0.480, width: 0.16, height: 0.080)
+                    hotspot(.menu, x: 0.406, y: 0.569, width: 0.17, height: 0.080)
+                    hotspot(.tv, x: 0.604, y: 0.569, width: 0.17, height: 0.080)
+                }
             }
             .frame(width: canvasSize.width, height: canvasSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

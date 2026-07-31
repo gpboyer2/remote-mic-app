@@ -1,0 +1,4 @@
+module AudioExceptionGuard {
+    header "AudioExceptionGuard.h"
+    export *
+}

@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import Darwin
-import Sparkle
 import SwiftUI
 
 @main
@@ -27,15 +26,13 @@ private final class RemoteMicAppDelegate: NSObject, NSApplicationDelegate, NSMen
     private var settingsWindowController: NSWindowController?
     private var subscriptions = Set<AnyCancellable>()
     private var terminationSignalSources: [DispatchSourceSignal] = []
-    private let updaterController = SPUStandardUpdaterController(
-        startingUpdater: true,
-        updaterDelegate: nil,
-        userDriverDelegate: nil
-    )
+    // Sparkle disabled - macOS 13 compatible build (no Sparkle dependency)
+    // private let updaterController = SPUStandardUpdaterController(
+    //     startingUpdater: true,
+    //     updaterDelegate: nil,
+    //     userDriverDelegate: nil
+    // )
 
-    private let connectionItem = NSMenuItem()
-    private let audioItem = NSMenuItem()
-    private let hidItem = NSMenuItem()
 
     var activationPolicy: NSApplication.ActivationPolicy {
         model.settings.showDockIcon ? .regular : .accessory
@@ -97,15 +94,18 @@ private final class RemoteMicAppDelegate: NSObject, NSApplicationDelegate, NSMen
             }
         }
 
-        connectionItem.isEnabled = false
-        audioItem.isEnabled = false
-        hidItem.isEnabled = false
-
         statusItem = item
         rebuildStatusMenu()
     }
 
     private func rebuildStatusMenu() {
+        let connectionItem = NSMenuItem()
+        connectionItem.isEnabled = false
+        let audioItem = NSMenuItem()
+        audioItem.isEnabled = false
+        let hidItem = NSMenuItem()
+        hidItem.isEnabled = false
+
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(connectionItem)
@@ -202,11 +202,12 @@ private final class RemoteMicAppDelegate: NSObject, NSApplicationDelegate, NSMen
     }
 
     private func refreshMenuStatus() {
-        connectionItem.title = model.connectionStatus.text(using: localization)
-        audioItem.title = model.isStreaming
+        guard let menu = statusMenu, menu.items.count >= 3 else { return }
+        menu.items[0].title = model.connectionStatus.text(using: localization)
+        menu.items[1].title = model.isStreaming
             ? localization.text("语音中")
             : model.audioStatus.text(using: localization)
-        hidItem.title = model.hidStatus.text(using: localization)
+        menu.items[2].title = model.hidStatus.text(using: localization)
         statusItem?.button?.image = statusImage(isStreaming: model.isStreaming)
     }
 
@@ -312,7 +313,9 @@ private final class RemoteMicAppDelegate: NSObject, NSApplicationDelegate, NSMen
     }
 
     @objc private func checkForUpdates() {
-        updaterController.checkForUpdates(nil)
+        // Sparkle disabled - open GitHub releases page instead
+        guard let url = URL(string: "https://github.com/HD838A/remote-mic-app/releases") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func setDockIconVisible(_ isVisible: Bool) {

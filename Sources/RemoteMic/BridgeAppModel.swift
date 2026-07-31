@@ -193,6 +193,10 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         DoubaoAudioDevicePolicy.device(in: audioDevices) != nil
     }
 
+    var doubaoAudioDeviceName: String {
+        DoubaoAudioDevicePolicy.device(in: audioDevices)?.name ?? DoubaoAudioDevicePolicy.deviceName
+    }
+
     func selectDoubaoAudioDevice() {
         guard let device = DoubaoAudioDevicePolicy.device(in: audioDevices) else {
             doubaoAudioStatus = LocalizedMessage(

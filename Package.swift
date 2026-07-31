@@ -1,9 +1,9 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
     name: "RemoteMic",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v13)],
     products: [
         .executable(
             name: "RemoteMic",
@@ -11,7 +11,7 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.4")
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.4")
     ],
     targets: [
         .executableTarget(
