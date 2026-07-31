@@ -18,7 +18,7 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
     @Published private(set) var testToneStatus = LocalizedMessage("未选择语音输出设备")
     @Published private(set) var isPlayingTestTone = false
     @Published private(set) var isAudioOutputReady = false
-    @Published private(set) var voiceShortcutStatus = LocalizedMessage("正在准备遥控器 Fn 硬件映射")
+    @Published private(set) var voiceShortcutStatus = LocalizedMessage("正在准备遥控器右侧 Control 映射")
 
     private let audioOutput = VirtualAudioOutput()
     private let voiceFunctionMapper = RemoteVoiceFunctionMapper()
@@ -511,7 +511,7 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         guard !isStreaming else { return }
         isVoiceTriggerEnabled = applied
         voiceShortcutStatus = LocalizedMessage(
-            applied ? "遥控器语音键已硬件映射为 Fn" : "等待遥控器 Fn 硬件映射"
+            applied ? "遥控器语音键已映射（触发豆包右侧 Control）" : "等待遥控器语音键映射"
         )
     }
 
@@ -520,11 +520,18 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         let shouldHold = transition == .press
         isVoiceTriggerEnabled = !shouldHold
         voiceShortcutStatus = LocalizedMessage(
-            shouldHold ? "硬件 Fn 已按下；松开语音键即释放" : "硬件 Fn 已释放"
+            shouldHold ? "右侧 Control 已按下；松开语音键即释放" : "右侧 Control 已释放"
         )
         AppLogger.shared.write(
-            "VOICE FN HARDWARE \(shouldHold ? "DOWN" : "UP") " +
+            "VOICE RIGHT_CTRL HARDWARE \(shouldHold ? "DOWN" : "UP") " +
                 "mapping=\(voiceFunctionMapper.isApplied)"
         )
+        // 主动 post 右侧 Control 独立按键事件让豆包输入法听见。
+        // 豆包"右 Control"语音模式需要两次独立按键（double-tap）才能触发，
+        // 无论按下还是松开都各发一次 double-tap 以确保可靠触发。
+        KeyboardInjector.postRightControlTap()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            KeyboardInjector.postRightControlTap()
+        }
     }
 }

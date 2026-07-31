@@ -911,6 +911,16 @@ enum KeyboardInjector {
         postSystemKey(type: type, isDown: false)
     }
 
+    public static func postAppleFnKey() {
+        postSystemKey(type: 3)
+    }
+
+    /// 发送右侧 Control 键的独立按下/松开事件（不带任何修饰符），
+    /// 用于触发豆包输入法"右 Control"语音模式。
+    public static func postRightControlTap() {
+        postKey(code: 0x3E, flags: [])
+    }
+
     private static func postSystemKey(type: Int32, isDown: Bool) {
         let keyState = isDown ? 0xA : 0xB
         let data1 = Int((type << 16) | Int32(keyState << 8))
