@@ -16,6 +16,7 @@ private struct PersonalizedConfiguration: Codable {
     let secondaryButtonBindings: [String: [String: ConfiguredButtonAction]]
     let applicationLanguage: AppLanguage
     let showDockIcon: Bool
+    let voiceKeyMode: VoiceKeyMode?
 }
 
 final class AppSettings: ObservableObject {
@@ -32,6 +33,7 @@ final class AppSettings: ObservableObject {
         static let showDockIcon = "showDockIcon"
         static let totalButtonPressCount = "usage.totalButtonPressCount"
         static let totalVoiceDuration = "usage.totalVoiceDuration"
+        static let voiceKeyMode = "voiceKeyMode"
     }
 
     private let defaults: UserDefaults
@@ -76,6 +78,10 @@ final class AppSettings: ObservableObject {
 
     @Published private(set) var totalVoiceDuration: TimeInterval {
         didSet { defaults.set(totalVoiceDuration, forKey: Keys.totalVoiceDuration) }
+    }
+
+    @Published var voiceKeyMode: VoiceKeyMode {
+        didSet { defaults.set(voiceKeyMode.rawValue, forKey: Keys.voiceKeyMode) }
     }
 
     var peripheralIdentifier: UUID? {
@@ -154,6 +160,9 @@ final class AppSettings: ObservableObject {
         totalVoiceDuration = defaults.object(forKey: Keys.totalVoiceDuration) == nil
             ? 0
             : max(0, defaults.double(forKey: Keys.totalVoiceDuration))
+        voiceKeyMode = VoiceKeyMode(
+            rawValue: defaults.string(forKey: Keys.voiceKeyMode) ?? ""
+        ) ?? .holdToTalk
     }
 
     func action(for button: RemoteButton) -> ButtonAction {
@@ -262,7 +271,8 @@ final class AppSettings: ObservableObject {
                 }
             ),
             applicationLanguage: applicationLanguage,
-            showDockIcon: showDockIcon
+            showDockIcon: showDockIcon,
+            voiceKeyMode: voiceKeyMode
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -309,6 +319,9 @@ final class AppSettings: ObservableObject {
         secondaryButtonBindings = importedSecondaryBindings
         applicationLanguage = configuration.applicationLanguage
         showDockIcon = configuration.showDockIcon
+        if let importedVoiceKeyMode = configuration.voiceKeyMode {
+            voiceKeyMode = importedVoiceKeyMode
+        }
     }
 
     private func saveBindings() {

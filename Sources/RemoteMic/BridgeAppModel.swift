@@ -506,28 +506,67 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         audioOutput.enqueue(samples: samples)
     }
 
+    /// 用户切换语音模式时调用，更新 HID 映射并重置 latch。
+    func updateVoiceKeyMode() {
+        voiceFunctionKeyLatch = VoiceFunctionKeyLatch()
+        applyVoiceFunctionMapping()
+    }
+
     private func applyVoiceFunctionMapping() {
-        let applied = voiceFunctionMapper.apply()
+        let shouldMapToRightControl = settings.voiceKeyMode == .holdToTalk
+        let applied: Bool
+        if shouldMapToRightControl {
+            applied = voiceFunctionMapper.apply()
+        } else {
+            // 免按模式：不映射 F5 → 右 Control，避免物理长按与合成短按叠加。
+            // 物理按键由 HIDRemoteMonitor 在兼容模式下抑制 F5 系统事件。
+            // 豆包免按模式由 updateVoiceFunctionKeyState 中的一次右 Control 短按驱动。
+            voiceFunctionMapper.restore()
+            applied = false
+        }
         guard !isStreaming else { return }
-        isVoiceTriggerEnabled = applied
+        isVoiceTriggerEnabled = shouldMapToRightControl ? applied : true
         voiceShortcutStatus = LocalizedMessage(
-            applied ? "遥控器语音键已映射（触发豆包右侧 Control）" : "等待遥控器语音键映射"
+            shouldMapToRightControl
+                ? (applied ? "遥控器语音键已映射（触发豆包右侧 Control）" : "等待遥控器语音键映射")
+                : "免按模式：语音开始时单击一次右侧 Control"
         )
     }
 
     private func updateVoiceFunctionKeyState(streaming: Bool) {
         guard let transition = voiceFunctionKeyLatch.transition(streaming: streaming) else { return }
         let shouldHold = transition == .press
-        isVoiceTriggerEnabled = !shouldHold
-        voiceShortcutStatus = LocalizedMessage(
-            shouldHold ? "右侧 Control 已按下；松开语音键即释放" : "右侧 Control 已释放"
-        )
-        AppLogger.shared.write(
-            "VOICE RIGHT_CTRL HARDWARE \(shouldHold ? "DOWN" : "UP") " +
-                "mapping=\(voiceFunctionMapper.isApplied)"
-        )
-        // HID 映射已将遥控器语音键直接映射为右侧 Control（0x000700E4），
-        // 遥控器物理按键按下时系统会原生产生右侧 Control 事件，
-        // 豆包输入法可直接捕获，无需额外 postRightControlTap()。
+
+        switch settings.voiceKeyMode {
+        case .holdToTalk:
+            // 长按模式：HID 映射已将遥控器语音键直接映射为右侧 Control（0x000700E4），
+            // 遥控器物理按键按下/松开时系统会原生产生右侧 Control 事件，
+            // 豆包输入法可直接捕获，无需额外合成事件。
+            isVoiceTriggerEnabled = !shouldHold
+            voiceShortcutStatus = LocalizedMessage(
+                shouldHold ? "右侧 Control 已按下；松开语音键即释放" : "右侧 Control 已释放"
+            )
+            AppLogger.shared.write(
+                "VOICE RIGHT_CTRL HARDWARE \(shouldHold ? "DOWN" : "UP") " +
+                    "mapping=\(voiceFunctionMapper.isApplied)"
+            )
+
+        case .handsFree:
+            // 免按模式：不应用 HID 映射，物理 F5 已被 HIDRemoteMonitor 抑制，
+            // 仅在遥控器开始传输语音时合成一次右 Control 短按，启动豆包免按语音。
+            // 遥控器松开只停止音频传输，不再发送按键；豆包按自身规则等待任意键结束。
+            isVoiceTriggerEnabled = !shouldHold
+            guard shouldHold else {
+                voiceShortcutStatus = LocalizedMessage("免按模式：等待任意键结束豆包语音")
+                AppLogger.shared.write("VOICE RIGHT_CTRL SYNTHETIC_TAP RELEASE_IGNORED")
+                return
+            }
+            voiceShortcutStatus = LocalizedMessage("免按模式：已单击右侧 Control 开始语音")
+            KeyboardInjector.postRightControlTap()
+            AppLogger.shared.write(
+                "VOICE RIGHT_CTRL SYNTHETIC_TAP START " +
+                    "mapping=\(voiceFunctionMapper.isApplied)"
+            )
+        }
     }
 }

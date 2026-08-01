@@ -40,6 +40,11 @@ private func hidInputReport(
 }
 
 final class HIDRemoteMonitor {
+    /// 遥控器语音键的 HID usage（F5 = 0x3E）
+    private static let voiceKeyUsage: UInt16 = 0x3E
+    /// F5 在 macOS 中的虚拟键码（用于兼容模式下抑制物理 F5 事件）
+    private static let voiceKeyMacKeyCode: UInt16 = 96
+
     private let settings: AppSettings
     private let eventSuppressor = KeyboardEventSuppressor()
     private var manager: IOHIDManager?
@@ -226,6 +231,12 @@ final class HIDRemoteMonitor {
         onActiveButtons?(RemoteButton.buttons(for: usages))
 
         for usage in pressed.sorted() {
+            // 免按模式下不映射 F5 → 右 Control，需要抑制原生 F5 系统事件
+            if usage == Self.voiceKeyUsage,
+               !activeDeviceIsSeized,
+               settings.voiceKeyMode == .handsFree {
+                eventSuppressor.arm(keyCode: Self.voiceKeyMacKeyCode, edge: .down)
+            }
             guard let button = RemoteButton.usageMap[usage] else { continue }
             onButtonPressed?(button)
             if !activeDeviceIsSeized {
@@ -258,6 +269,12 @@ final class HIDRemoteMonitor {
         }
 
         for usage in released {
+            // 免按模式下抑制 F5 松开事件
+            if usage == Self.voiceKeyUsage,
+               !activeDeviceIsSeized,
+               settings.voiceKeyMode == .handsFree {
+                eventSuppressor.arm(keyCode: Self.voiceKeyMacKeyCode, edge: .up)
+            }
             if !activeDeviceIsSeized, let button = RemoteButton.usageMap[usage] {
                 eventSuppressor.arm(button: button, edge: .up)
             }

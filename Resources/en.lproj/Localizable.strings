@@ -236,3 +236,12 @@
 "配置已导入并应用" = "Configuration imported and applied";
 "导入失败：不支持此配置版本" = "Import failed: this configuration version is not supported";
 "导入失败：配置文件无效" = "Import failed: the configuration file is invalid";
+"语音触发模式" = "Voice Trigger Mode";
+"豆包输入法语音键触发方式" = "How the remote triggers Doubao voice input";
+"长按模式" = "Hold to Talk";
+"免按模式" = "Hands-Free";
+"长按模式：按住语音键触发豆包右侧 Control，松开即结束。豆包需设为长按模式。" = "Hold to Talk: hold the voice button to press Right Control, then release it to stop. Select Hold to Talk in Doubao.";
+"免按模式：按下语音键时单击一次右侧 Control 来启动豆包；RC003 仍需按住语音键才能持续传输声音，松开后再按任意键结束。豆包需设为免按模式，并把快捷键设为右侧 Control。" = "Hands-Free: pressing the voice button taps Right Control once to start Doubao. RC003 still transmits audio only while its voice button is held; after releasing it, press any key to finish. Select Hands-Free in Doubao and set its shortcut to Right Control.";
+"免按模式：语音开始时单击一次右侧 Control" = "Hands-Free: tap Right Control once when voice starts";
+"免按模式：已单击右侧 Control 开始语音" = "Hands-Free: tapped Right Control to start voice input";
+"免按模式：等待任意键结束豆包语音" = "Hands-Free: waiting for any key to finish Doubao voice input";

@@ -84,11 +84,21 @@ final class KeyboardEventSuppressor {
 
     func arm(button: RemoteButton, edge: RemoteEventEdge) {
         guard let nativeEvent = button.nativeEvent else { return }
+        arm(event: nativeEvent, edge: edge)
+    }
+
+    /// 直接按 macOS key code 抑制物理按键事件，
+    /// 用于免按模式下抑制 F5（语音键）未被 HID 映射的系统事件。
+    func arm(keyCode: UInt16, edge: RemoteEventEdge) {
+        arm(event: .keyboard(keyCode: keyCode), edge: edge)
+    }
+
+    private func arm(event: RemoteNativeEvent, edge: RemoteEventEdge) {
         let now = ProcessInfo.processInfo.systemUptime
         lock.lock()
         pendingEvents.removeAll { $0.expiresAt <= now }
         pendingEvents.append(PendingEvent(
-            event: nativeEvent,
+            event: event,
             edge: edge,
             expiresAt: now + 0.18
         ))

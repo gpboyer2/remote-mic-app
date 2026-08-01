@@ -466,3 +466,27 @@ enum HIDPermissionRequest: Equatable {
     case inputMonitoring
     case accessibility
 }
+
+/// 语音键触发模式
+enum VoiceKeyMode: String, CaseIterable, Codable, Identifiable {
+    /// 长按说话，松手结束（默认）
+    case holdToTalk
+    /// 按一次开始，再按任意键结束（免按模式）
+    case handsFree
+
+    var id: String { rawValue }
+
+    func displayName(using localization: LocalizationStore) -> String {
+        switch self {
+        case .holdToTalk: return localization.text("长按模式")
+        case .handsFree: return localization.text("免按模式")
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .holdToTalk: return "按住说话，松手结束"
+        case .handsFree: return "按一次开始，再按任意键结束"
+        }
+    }
+}

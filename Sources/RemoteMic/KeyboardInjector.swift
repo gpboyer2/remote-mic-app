@@ -894,16 +894,17 @@ enum KeyboardInjector {
     }
 
     private static func postKey(code: CGKeyCode, flags: CGEventFlags = []) {
+        postKey(code: code, flags: flags, keyDown: true)
+        postKey(code: code, flags: flags, keyDown: false)
+    }
+
+    private static func postKey(code: CGKeyCode, flags: CGEventFlags, keyDown: Bool) {
         guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false)
+              let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: keyDown)
         else { return }
-        down.flags = flags
-        up.flags = flags
-        down.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
-        up.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        event.flags = flags
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        event.post(tap: .cghidEventTap)
     }
 
     private static func postSystemKey(type: Int32) {
@@ -915,10 +916,29 @@ enum KeyboardInjector {
         postSystemKey(type: 3)
     }
 
-    /// 发送右侧 Control 键的独立按下/松开事件（不带任何修饰符），
-    /// 用于触发豆包输入法"右 Control"语音模式。
+    /// 构造右侧 Control 的修饰键状态变化事件。
+    /// macOS 的 Control、Option、Command、Shift 等修饰键使用 flagsChanged，
+    /// 不能按普通 keyDown/keyUp 事件发送，否则只监听修饰键变化的快捷键无法识别。
+    static func rightControlEvent(keyDown: Bool) -> CGEvent? {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let event = CGEvent(
+                  keyboardEventSource: source,
+                  virtualKey: 0x3E,
+                  keyDown: keyDown
+              )
+        else { return nil }
+        event.type = .flagsChanged
+        event.flags = keyDown ? .maskControl : []
+        event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+        return event
+    }
+
+    /// 发送一次右侧 Control 短按，用于触发豆包输入法的免按模式。
     public static func postRightControlTap() {
-        postKey(code: 0x3E, flags: [])
+        rightControlEvent(keyDown: true)?.post(tap: .cghidEventTap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
+            rightControlEvent(keyDown: false)?.post(tap: .cghidEventTap)
+        }
     }
 
     private static func postSystemKey(type: Int32, isDown: Bool) {

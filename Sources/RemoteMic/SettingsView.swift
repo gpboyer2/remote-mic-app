@@ -361,6 +361,39 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Divider()
+
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("语音触发模式")
+                                .font(.headline)
+                            Text("豆包输入法语音键触发方式")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 20)
+                        Picker("", selection: Binding(
+                            get: { settings.voiceKeyMode },
+                            set: { newValue in
+                                settings.voiceKeyMode = newValue
+                                model.updateVoiceKeyMode()
+                            }
+                        )) {
+                            ForEach(VoiceKeyMode.allCases) { mode in
+                                Text(mode.displayName(using: localization)).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
+                    }
+
+                    Text(localization.text(settings.voiceKeyMode == .holdToTalk
+                        ? "长按模式：按住语音键触发豆包右侧 Control，松开即结束。豆包需设为长按模式。"
+                        : "免按模式：按下语音键时单击一次右侧 Control 来启动豆包；RC003 仍需按住语音键才能持续传输声音，松开后再按任意键结束。豆包需设为免按模式，并把快捷键设为右侧 Control。"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -1035,6 +1068,7 @@ struct SettingsView: View {
             setDockIconVisible(settings.showDockIcon)
             model.applyAudioSettings(reason: "configuration_import")
             model.applyHIDSettings()
+            model.updateVoiceKeyMode()
             configurationStatus = ConfigurationStatus(
                 message: LocalizedMessage("配置已导入并应用"),
                 tint: .green,
