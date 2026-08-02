@@ -24,6 +24,7 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
     private let voiceFunctionMapper = RemoteVoiceFunctionMapper()
     private var testToneGeneration = 0
     private var voiceFunctionKeyLatch = VoiceFunctionKeyLatch()
+    private var handsFreeSessionActive = false
     private var voiceSessionStartedAt: Date?
     private lazy var bluetoothBridge = XiaomiBluetoothBridge(settings: settings, delegate: self)
     private lazy var hidMonitor: HIDRemoteMonitor = {
@@ -34,8 +35,16 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         monitor.onActiveButtons = { [weak self] buttons in
             self?.activeRemoteButtons = buttons
         }
-        monitor.onButtonPressed = { [weak self] _ in
-            self?.settings.recordButtonPress()
+        monitor.onButtonPressed = { [weak self] button in
+            guard let self else { return false }
+            self.settings.recordButtonPress()
+            return self.cancelHandsFreeSessionIfNeeded(button)
+        }
+        monitor.onButtonReleased = { [weak self] button in
+            self?.restoreConfirmKeyAfterCancelIfNeeded(button)
+        }
+        monitor.onVoiceKeyPressed = { [weak self] in
+            self?.startHandsFreeSession()
         }
         return monitor
     }()
@@ -94,6 +103,9 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
             statusMessage: LocalizedMessage("应用已停止"),
             logReason: "app_stop"
         )
+        if handsFreeSessionActive {
+            finishHandsFreeSession(reason: "app_stop", blockReopenUntilNextPress: false)
+        }
         bluetoothBridge.stop()
         updateVoiceFunctionKeyState(streaming: false)
         hidMonitor.stop()
@@ -479,94 +491,182 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         }
     }
 
+    private var voiceOutputChunkCount = 0
+
+    /// 免按模式的语音键只负责开始和继续说话，永远不会承担结束职责。
+    /// 豆包已经开启时再次按语音键，只允许 RC003 建立新的真实音频流，不重复切换快捷键。
+    private func startHandsFreeSession() {
+        guard settings.voiceKeyMode == .handsFree else { return }
+        settings.recordButtonPress()
+        bluetoothBridge.prepareForVoiceStart()
+        if handsFreeSessionActive {
+            voiceShortcutStatus = LocalizedMessage("免按模式：正在说话；按确定键取消")
+            AppLogger.shared.write("VOICE HANDSFREE CONTINUE source=voice_key")
+            return
+        }
+
+        handsFreeSessionActive = true
+        voiceSessionStartedAt = Date()
+        isVoiceTriggerEnabled = false
+        voiceShortcutStatus = LocalizedMessage("免按模式：豆包已启动；按确定键取消")
+        let mappingApplied = voiceFunctionMapper.apply(cancelWithConfirmKey: true)
+        AppLogger.shared.write(
+            "VOICE HANDSFREE START source=voice_key hardware_mapping=\(mappingApplied) " +
+                "confirm_to_right_control=\(voiceFunctionMapper.isCancelKeyApplied)"
+        )
+    }
+
+    /// 免按语音开启时，确定键专门取消会话并吞掉原本配置的 Return；其他状态不拦截按键。
+    private func cancelHandsFreeSessionIfNeeded(_ button: RemoteButton) -> Bool {
+        guard button == .ok,
+              settings.voiceKeyMode == .handsFree,
+              handsFreeSessionActive
+        else { return false }
+        finishHandsFreeSession(
+            reason: "ok_button_cancel",
+            blockReopenUntilNextPress: true,
+            keepConfirmMappedUntilRelease: true
+        )
+        return true
+    }
+
+    /// 结束免按模式会话，并让豆包和遥控器协议回到明确的关闭状态。
+    private func finishHandsFreeSession(
+        reason: String,
+        blockReopenUntilNextPress: Bool,
+        keepConfirmMappedUntilRelease: Bool = false
+    ) {
+        guard handsFreeSessionActive else { return }
+        handsFreeSessionActive = false
+        if let voiceSessionStartedAt {
+            settings.recordVoiceDuration(Date().timeIntervalSince(voiceSessionStartedAt))
+            self.voiceSessionStartedAt = nil
+        }
+        bluetoothBridge.closeMicrophoneIfNeeded(
+            blockReopenUntilNextPress: blockReopenUntilNextPress
+        )
+        if !keepConfirmMappedUntilRelease {
+            _ = voiceFunctionMapper.apply(cancelWithConfirmKey: false)
+        }
+        isVoiceTriggerEnabled = true
+        voiceShortcutStatus = LocalizedMessage("免按模式：等待第一次按语音键")
+        AppLogger.shared.write("VOICE HANDSFREE END reason=\(reason)")
+    }
+
+    /// 确定键松开并完成真实右侧 Control 事件后，再恢复它原有的 Return 语义。
+    private func restoreConfirmKeyAfterCancelIfNeeded(_ button: RemoteButton) {
+        guard button == .ok,
+              settings.voiceKeyMode == .handsFree,
+              !handsFreeSessionActive,
+              voiceFunctionMapper.isCancelKeyApplied
+        else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80)) { [weak self] in
+            guard let self,
+                  !self.handsFreeSessionActive,
+                  self.voiceFunctionMapper.isCancelKeyApplied
+            else { return }
+            let applied = self.voiceFunctionMapper.apply(cancelWithConfirmKey: false)
+            AppLogger.shared.write(
+                "VOICE HANDSFREE CONFIRM_RESTORED applied=\(applied) action=return"
+            )
+        }
+    }
+
+    /// 接收 RC003 的真实音频会话；这里只管理音频，不切换免按模式的豆包状态。
     func bluetoothBridgeDidStartVoice(_ bridge: XiaomiBluetoothBridge) {
         cancelTestToneIfNeeded(
             statusMessage: LocalizedMessage("RC003 语音进行中，已拒绝测试音"),
             logReason: "voice_start"
         )
-        if voiceSessionStartedAt == nil {
+        if settings.voiceKeyMode == .holdToTalk, voiceSessionStartedAt == nil {
             settings.recordButtonPress()
             voiceSessionStartedAt = Date()
         }
-        updateVoiceFunctionKeyState(streaming: true)
+        if settings.voiceKeyMode == .holdToTalk {
+            updateVoiceFunctionKeyState(streaming: true)
+        }
         isStreaming = true
+        voiceOutputChunkCount = 0
+        AppLogger.shared.write(
+            "VOICE AUDIO session_ready streaming=true hands_free_active=\(handsFreeSessionActive)"
+        )
     }
 
+    /// 处理 RC003 物理松手后的音频停止；免按开关状态保持不变，且绝不主动伪造续开会话。
     func bluetoothBridgeDidStopVoice(_ bridge: XiaomiBluetoothBridge) {
-        if let voiceSessionStartedAt {
-            settings.recordVoiceDuration(Date().timeIntervalSince(voiceSessionStartedAt))
-            self.voiceSessionStartedAt = nil
+        if settings.voiceKeyMode == .holdToTalk {
+            if let voiceSessionStartedAt {
+                settings.recordVoiceDuration(Date().timeIntervalSince(voiceSessionStartedAt))
+                self.voiceSessionStartedAt = nil
+            }
+            updateVoiceFunctionKeyState(streaming: false)
+        } else {
+            voiceShortcutStatus = LocalizedMessage(
+                handsFreeSessionActive
+                    ? "免按模式：豆包仍开启；按确定键取消"
+                    : "免按模式：等待第一次按语音键"
+            )
+            AppLogger.shared.write(
+                "VOICE HANDSFREE AUDIO_STOP session_active=\(handsFreeSessionActive) " +
+                    "output_chunks=\(voiceOutputChunkCount) automatic_reopen=false"
+            )
         }
-        updateVoiceFunctionKeyState(streaming: false)
         isStreaming = false
         audioOutput.endSession()
     }
 
+    /// 把已解码 PCM 写入豆包所选虚拟音频设备，并限频记录真实输出结果。
     func bluetoothBridge(_ bridge: XiaomiBluetoothBridge, didDecode samples: [Int16]) {
-        audioOutput.enqueue(samples: samples)
+        voiceOutputChunkCount += 1
+        let accepted = audioOutput.enqueue(samples: samples)
+        if !accepted || voiceOutputChunkCount == 1 || voiceOutputChunkCount.isMultiple(of: 20) {
+            let peak = samples.reduce(0) { max($0, abs(Int($1))) }
+            AppLogger.shared.write(
+                "VOICE AUDIO output chunk=\(voiceOutputChunkCount) samples=\(samples.count) " +
+                    "peak=\(peak) accepted=\(accepted)"
+            )
+        }
     }
 
-    /// 用户切换语音模式时调用，更新 HID 映射并重置 latch。
+    /// 用户切换语音模式时调用，先结束当前免按会话，再更新唯一的触发路径。
     func updateVoiceKeyMode() {
+        if handsFreeSessionActive {
+            finishHandsFreeSession(reason: "voice_mode_changed", blockReopenUntilNextPress: false)
+        }
         voiceFunctionKeyLatch = VoiceFunctionKeyLatch()
         applyVoiceFunctionMapping()
     }
 
+    /// 两种模式都只使用 RC003 真实硬件右侧 Control，不再使用豆包会拒绝的软件合成键。
     private func applyVoiceFunctionMapping() {
-        let shouldMapToRightControl = settings.voiceKeyMode == .holdToTalk
-        let applied: Bool
-        if shouldMapToRightControl {
-            applied = voiceFunctionMapper.apply()
-        } else {
-            // 免按模式：不映射 F5 → 右 Control，避免物理长按与合成短按叠加。
-            // 物理按键由 HIDRemoteMonitor 在兼容模式下抑制 F5 系统事件。
-            // 豆包免按模式由 updateVoiceFunctionKeyState 中的一次右 Control 短按驱动。
-            voiceFunctionMapper.restore()
-            applied = false
-        }
+        let cancelWithConfirmKey = settings.voiceKeyMode == .handsFree && handsFreeSessionActive
+        let applied = voiceFunctionMapper.apply(cancelWithConfirmKey: cancelWithConfirmKey)
         guard !isStreaming else { return }
-        isVoiceTriggerEnabled = shouldMapToRightControl ? applied : true
+        isVoiceTriggerEnabled = applied
         voiceShortcutStatus = LocalizedMessage(
-            shouldMapToRightControl
+            settings.voiceKeyMode == .holdToTalk
                 ? (applied ? "遥控器语音键已映射（触发豆包右侧 Control）" : "等待遥控器语音键映射")
-                : "免按模式：语音开始时单击一次右侧 Control"
+                : (applied ? "免按模式：按语音键开始，按确定键取消" : "等待遥控器语音键映射")
         )
     }
 
+    /// 长按模式由真实音频流同步右侧 Control；免按模式完全不经过这条路径。
     private func updateVoiceFunctionKeyState(streaming: Bool) {
         guard let transition = voiceFunctionKeyLatch.transition(streaming: streaming) else { return }
         let shouldHold = transition == .press
 
         switch settings.voiceKeyMode {
         case .holdToTalk:
-            // 长按模式：HID 映射已将遥控器语音键直接映射为右侧 Control（0x000700E4），
-            // 遥控器物理按键按下/松开时系统会原生产生右侧 Control 事件，
-            // 豆包输入法可直接捕获，无需额外合成事件。
             isVoiceTriggerEnabled = !shouldHold
             voiceShortcutStatus = LocalizedMessage(
-                shouldHold ? "右侧 Control 已按下；松开语音键即释放" : "右侧 Control 已释放"
+                shouldHold ? "右侧 Control 已按下" : "右侧 Control 已释放"
             )
             AppLogger.shared.write(
                 "VOICE RIGHT_CTRL HARDWARE \(shouldHold ? "DOWN" : "UP") " +
-                    "mapping=\(voiceFunctionMapper.isApplied)"
+                    "mapping=\(voiceFunctionMapper.isApplied) mode=holdToTalk"
             )
-
         case .handsFree:
-            // 免按模式：不应用 HID 映射，物理 F5 已被 HIDRemoteMonitor 抑制，
-            // 仅在遥控器开始传输语音时合成一次右 Control 短按，启动豆包免按语音。
-            // 遥控器松开只停止音频传输，不再发送按键；豆包按自身规则等待任意键结束。
-            isVoiceTriggerEnabled = !shouldHold
-            guard shouldHold else {
-                voiceShortcutStatus = LocalizedMessage("免按模式：等待任意键结束豆包语音")
-                AppLogger.shared.write("VOICE RIGHT_CTRL SYNTHETIC_TAP RELEASE_IGNORED")
-                return
-            }
-            voiceShortcutStatus = LocalizedMessage("免按模式：已单击右侧 Control 开始语音")
-            KeyboardInjector.postRightControlTap()
-            AppLogger.shared.write(
-                "VOICE RIGHT_CTRL SYNTHETIC_TAP START " +
-                    "mapping=\(voiceFunctionMapper.isApplied)"
-            )
+            AppLogger.shared.write("ERROR VOICE HANDSFREE unexpected_stream_latch_transition")
         }
     }
 }

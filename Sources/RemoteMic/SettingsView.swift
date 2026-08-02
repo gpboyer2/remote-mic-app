@@ -390,7 +390,7 @@ struct SettingsView: View {
 
                     Text(localization.text(settings.voiceKeyMode == .holdToTalk
                         ? "长按模式：按住语音键触发豆包右侧 Control，松开即结束。豆包需设为长按模式。"
-                        : "免按模式：按下语音键时单击一次右侧 Control 来启动豆包；RC003 仍需按住语音键才能持续传输声音，松开后再按任意键结束。豆包需设为免按模式，并把快捷键设为右侧 Control。"))
+                        : "免按模式：按语音键启动或继续说话，按确定键取消。语音状态中确定键不会发送原本配置的 Return；其他状态仍发送 Return。RC003 只在物理按住时传送声音。豆包需设为免按模式，快捷键设为右侧 Control。"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -471,7 +471,7 @@ enum HIDPermissionRequest: Equatable {
 enum VoiceKeyMode: String, CaseIterable, Codable, Identifiable {
     /// 长按说话，松手结束（默认）
     case holdToTalk
-    /// 按一次开始，再按任意键结束（免按模式）
+    /// 按语音键开始或继续说话，按确定键取消
     case handsFree
 
     var id: String { rawValue }
@@ -486,7 +486,7 @@ enum VoiceKeyMode: String, CaseIterable, Codable, Identifiable {
     var description: String {
         switch self {
         case .holdToTalk: return "按住说话，松手结束"
-        case .handsFree: return "按一次开始，再按任意键结束"
+        case .handsFree: return "按语音键开始，按确定键取消"
         }
     }
 }

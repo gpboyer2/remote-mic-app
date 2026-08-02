@@ -132,21 +132,6 @@ struct RemoteButtonsTests {
         #expect(posted == nil)
     }
 
-    @Test func rightControlTapUsesModifierStateChangeEvents() throws {
-        let down = try #require(KeyboardInjector.rightControlEvent(keyDown: true))
-        let up = try #require(KeyboardInjector.rightControlEvent(keyDown: false))
-
-        #expect(down.type == .flagsChanged)
-        #expect(down.flags.contains(.maskControl))
-        #expect(down.getIntegerValueField(.keyboardEventKeycode) == 0x3E)
-        #expect(down.getIntegerValueField(.eventSourceUserData) == KeyboardInjector.syntheticEventMarker)
-
-        #expect(up.type == .flagsChanged)
-        #expect(!up.flags.contains(.maskControl))
-        #expect(up.getIntegerValueField(.keyboardEventKeycode) == 0x3E)
-        #expect(up.getIntegerValueField(.eventSourceUserData) == KeyboardInjector.syntheticEventMarker)
-    }
-
     @Test func unconfiguredCustomShortcutDoesNotReportPermissionFailure() {
         #expect(KeyboardInjector.send(
             .customShortcut,

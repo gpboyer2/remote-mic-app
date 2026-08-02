@@ -278,19 +278,43 @@ let staleVoiceMapping = HIDUsageMapping(
     source: RemoteVoiceFunctionMappingPolicy.remoteVoiceKey.source,
     destination: 0x0000_0007_0000_00E1
 )
+let originalConfirmMapping = HIDUsageMapping(
+    source: RemoteVoiceFunctionMappingPolicy.handsFreeCancelKey.source,
+    destination: 0x0000_0007_0000_0029
+)
 let hardwareVoiceMappings = RemoteVoiceFunctionMappingPolicy.applying(
-    to: [unrelatedMapping, staleVoiceMapping]
+    to: [unrelatedMapping, staleVoiceMapping, originalConfirmMapping],
+    originalConfirmMapping: originalConfirmMapping,
+    cancelWithConfirmKey: false
 )
 check(
     hardwareVoiceMappings == [
         unrelatedMapping,
         RemoteVoiceFunctionMappingPolicy.remoteVoiceKey,
+        originalConfirmMapping,
     ],
-    "RC003 hardware voice mapping replaces only F5 and preserves unrelated mappings"
+    "RC003 hardware voice mapping preserves confirm and unrelated mappings"
 )
 check(
-    RemoteVoiceFunctionMappingPolicy.applying(to: hardwareVoiceMappings) == hardwareVoiceMappings,
+    RemoteVoiceFunctionMappingPolicy.applying(
+        to: hardwareVoiceMappings,
+        originalConfirmMapping: originalConfirmMapping,
+        cancelWithConfirmKey: false
+    ) == hardwareVoiceMappings,
     "RC003 hardware voice mapping is idempotent"
+)
+let handsFreeMappings = RemoteVoiceFunctionMappingPolicy.applying(
+    to: hardwareVoiceMappings,
+    originalConfirmMapping: originalConfirmMapping,
+    cancelWithConfirmKey: true
+)
+check(
+    handsFreeMappings == [
+        unrelatedMapping,
+        RemoteVoiceFunctionMappingPolicy.remoteVoiceKey,
+        RemoteVoiceFunctionMappingPolicy.handsFreeCancelKey,
+    ],
+    "RC003 hands-free mapping uses hardware Right Control for confirm cancel"
 )
 let changedUnrelatedMapping = HIDUsageMapping(
     source: unrelatedMapping.source,
@@ -299,13 +323,23 @@ let changedUnrelatedMapping = HIDUsageMapping(
 check(
     RemoteVoiceFunctionMappingPolicy.restoring(
         originalVoiceMapping: staleVoiceMapping,
-        in: [changedUnrelatedMapping, RemoteVoiceFunctionMappingPolicy.remoteVoiceKey]
-    ) == [changedUnrelatedMapping, staleVoiceMapping] &&
+        originalConfirmMapping: originalConfirmMapping,
+        in: [
+            changedUnrelatedMapping,
+            RemoteVoiceFunctionMappingPolicy.remoteVoiceKey,
+            RemoteVoiceFunctionMappingPolicy.handsFreeCancelKey,
+        ]
+    ) == [changedUnrelatedMapping, staleVoiceMapping, originalConfirmMapping] &&
         RemoteVoiceFunctionMappingPolicy.restoring(
             originalVoiceMapping: nil,
-            in: [changedUnrelatedMapping, RemoteVoiceFunctionMappingPolicy.remoteVoiceKey]
+            originalConfirmMapping: nil,
+            in: [
+                changedUnrelatedMapping,
+                RemoteVoiceFunctionMappingPolicy.remoteVoiceKey,
+                RemoteVoiceFunctionMappingPolicy.handsFreeCancelKey,
+            ]
         ) == [changedUnrelatedMapping],
-    "RC003 hardware voice mapping restore preserves unrelated runtime changes"
+    "RC003 hardware mappings restore both keys and preserve unrelated runtime changes"
 )
 check(
     HIDUsageMapping(property: RemoteVoiceFunctionMappingPolicy.remoteVoiceKey.property) ==

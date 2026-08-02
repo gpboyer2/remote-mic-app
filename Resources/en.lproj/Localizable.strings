@@ -241,7 +241,11 @@
 "长按模式" = "Hold to Talk";
 "免按模式" = "Hands-Free";
 "长按模式：按住语音键触发豆包右侧 Control，松开即结束。豆包需设为长按模式。" = "Hold to Talk: hold the voice button to press Right Control, then release it to stop. Select Hold to Talk in Doubao.";
-"免按模式：按下语音键时单击一次右侧 Control 来启动豆包；RC003 仍需按住语音键才能持续传输声音，松开后再按任意键结束。豆包需设为免按模式，并把快捷键设为右侧 Control。" = "Hands-Free: pressing the voice button taps Right Control once to start Doubao. RC003 still transmits audio only while its voice button is held; after releasing it, press any key to finish. Select Hands-Free in Doubao and set its shortcut to Right Control.";
-"免按模式：语音开始时单击一次右侧 Control" = "Hands-Free: tap Right Control once when voice starts";
-"免按模式：已单击右侧 Control 开始语音" = "Hands-Free: tapped Right Control to start voice input";
-"免按模式：等待任意键结束豆包语音" = "Hands-Free: waiting for any key to finish Doubao voice input";
+"免按模式：按语音键启动或继续说话，按确定键取消。语音状态中确定键不会发送原本配置的 Return；其他状态仍发送 Return。RC003 只在物理按住时传送声音。豆包需设为免按模式，快捷键设为右侧 Control。" = "Hands-Free: press the voice button to start or continue speaking, then press OK to cancel. While voice is active, OK does not send its configured Return; otherwise it still sends Return. RC003 sends audio only while physically held. Select Hands-Free in Doubao and set its shortcut to Right Control.";
+"右侧 Control 已按下" = "Right Control pressed";
+"右侧 Control 已释放" = "Right Control released";
+"免按模式：按语音键开始，按确定键取消" = "Hands-Free: press the voice button to start, then press OK to cancel";
+"免按模式：等待第一次按语音键" = "Hands-Free: waiting for the first voice-button press";
+"免按模式：豆包已启动；按确定键取消" = "Hands-Free: Doubao started; press OK to cancel";
+"免按模式：豆包仍开启；按确定键取消" = "Hands-Free: Doubao remains active; press OK to cancel";
+"免按模式：正在说话；按确定键取消" = "Hands-Free: speaking; press OK to cancel";

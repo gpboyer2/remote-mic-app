@@ -31,26 +31,54 @@ struct HIDUsageMapping: Equatable {
 }
 
 enum RemoteVoiceFunctionMappingPolicy {
-    // RC003 exposes its microphone button as keyboard F5 (usage page 7,
-    // usage 0x3e). We remap it to Right Control (usage page 7, usage 0xe4)
-    // so that pressing the voice button triggers the same key that
-    // Doubao Input Method is configured to listen to on this machine.
+    /// RC003 语音键的原始 F5 usage 始终映射为真实右侧 Control。
+    /// 豆包会忽略软件合成的右侧 Control，只有 HID 层的真实按键可靠。
     static let remoteVoiceKey = HIDUsageMapping(
         source: 0x0000_0007_0000_003E,
         destination: 0x0000_0007_0000_00E4
     )
 
-    static func applying(to existing: [HIDUsageMapping]) -> [HIDUsageMapping] {
-        existing.filter { $0.source != remoteVoiceKey.source } + [remoteVoiceKey]
+    /// 免按会话中把确定键的 Return usage 临时映射为右侧 Control，
+    /// 让确定键用真实硬件事件关闭豆包，同时不会泄漏 Return 提交。
+    static let handsFreeCancelKey = HIDUsageMapping(
+        source: 0x0000_0007_0000_0028,
+        destination: 0x0000_0007_0000_00E4
+    )
+
+    /// 计算当前会话需要的唯一 HID 映射集合，并保留其他按键的运行时修改。
+    static func applying(
+        to existing: [HIDUsageMapping],
+        originalConfirmMapping: HIDUsageMapping?,
+        cancelWithConfirmKey: Bool
+    ) -> [HIDUsageMapping] {
+        var desired = existing.filter {
+            $0.source != remoteVoiceKey.source && $0.source != handsFreeCancelKey.source
+        }
+        desired.append(remoteVoiceKey)
+        if cancelWithConfirmKey {
+            desired.append(handsFreeCancelKey)
+        } else if let originalConfirmMapping {
+            desired.append(originalConfirmMapping)
+        }
+        return desired
     }
 
+    /// 应用退出时恢复语音键和确定键原有映射，不改动其他按键。
     static func restoring(
         originalVoiceMapping: HIDUsageMapping?,
+        originalConfirmMapping: HIDUsageMapping?,
         in current: [HIDUsageMapping]
     ) -> [HIDUsageMapping] {
-        let withoutVoiceKey = current.filter { $0.source != remoteVoiceKey.source }
-        guard let originalVoiceMapping else { return withoutVoiceKey }
-        return withoutVoiceKey + [originalVoiceMapping]
+        var restored = current.filter {
+            $0.source != remoteVoiceKey.source && $0.source != handsFreeCancelKey.source
+        }
+        if let originalVoiceMapping {
+            restored.append(originalVoiceMapping)
+        }
+        if let originalConfirmMapping {
+            restored.append(originalConfirmMapping)
+        }
+        return restored
     }
 }
 
@@ -59,15 +87,18 @@ final class RemoteVoiceFunctionMapper {
     private static let productID = 0x32B8
     private static let mappingProperty = "UserKeyMapping" as CFString
 
-    private struct OriginalVoiceMapping {
-        let mapping: HIDUsageMapping?
+    private struct OriginalMappings {
+        let voiceKey: HIDUsageMapping?
+        let confirmKey: HIDUsageMapping?
     }
 
-    private var originalMappings: [UInt64: OriginalVoiceMapping] = [:]
+    private var originalMappings: [UInt64: OriginalMappings] = [:]
     private(set) var isApplied = false
+    private(set) var isCancelKeyApplied = false
 
+    /// 按会话状态更新 RC003 的真实硬件映射。
     @discardableResult
-    func apply() -> Bool {
+    func apply(cancelWithConfirmKey: Bool) -> Bool {
         let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
         let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] ?? []
         var matchedCount = 0
@@ -78,13 +109,21 @@ final class RemoteVoiceFunctionMapper {
             guard let registryID = Self.registryID(service) else { continue }
             let current = Self.readMappings(service)
             if originalMappings[registryID] == nil {
-                originalMappings[registryID] = OriginalVoiceMapping(
-                    mapping: current.first {
+                originalMappings[registryID] = OriginalMappings(
+                    voiceKey: current.first {
                         $0.source == RemoteVoiceFunctionMappingPolicy.remoteVoiceKey.source
+                    },
+                    confirmKey: current.first {
+                        $0.source == RemoteVoiceFunctionMappingPolicy.handsFreeCancelKey.source
                     }
                 )
             }
-            let desired = RemoteVoiceFunctionMappingPolicy.applying(to: current)
+            guard let original = originalMappings[registryID] else { continue }
+            let desired = RemoteVoiceFunctionMappingPolicy.applying(
+                to: current,
+                originalConfirmMapping: original.confirmKey,
+                cancelWithConfirmKey: cancelWithConfirmKey
+            )
             if IOHIDServiceClientSetProperty(
                 service,
                 Self.mappingProperty,
@@ -95,15 +134,19 @@ final class RemoteVoiceFunctionMapper {
         }
 
         isApplied = appliedCount > 0
+        isCancelKeyApplied = isApplied && cancelWithConfirmKey
         AppLogger.shared.write(
-            "VOICE FN MAPPING applied=\(isApplied) matched=\(matchedCount)"
+            "VOICE FN MAPPING applied=\(isApplied) matched=\(matchedCount) " +
+                "confirm_to_right_control=\(isCancelKeyApplied)"
         )
         return isApplied
     }
 
+    /// 应用停止时恢复 RC003 原有映射。
     func restore() {
         guard !originalMappings.isEmpty else {
             isApplied = false
+            isCancelKeyApplied = false
             return
         }
 
@@ -116,7 +159,8 @@ final class RemoteVoiceFunctionMapper {
                   let original = originalMappings[registryID]
             else { continue }
             let restored = RemoteVoiceFunctionMappingPolicy.restoring(
-                originalVoiceMapping: original.mapping,
+                originalVoiceMapping: original.voiceKey,
+                originalConfirmMapping: original.confirmKey,
                 in: Self.readMappings(service)
             )
             if IOHIDServiceClientSetProperty(
@@ -130,6 +174,7 @@ final class RemoteVoiceFunctionMapper {
 
         originalMappings.removeAll()
         isApplied = false
+        isCancelKeyApplied = false
         AppLogger.shared.write("VOICE FN MAPPING restored=\(restoredCount)")
     }
 

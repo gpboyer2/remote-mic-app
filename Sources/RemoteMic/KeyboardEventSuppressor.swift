@@ -39,6 +39,7 @@ final class KeyboardEventSuppressor {
 
         let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue) |
             CGEventMask(1 << CGEventType.keyUp.rawValue) |
+            CGEventMask(1 << CGEventType.flagsChanged.rawValue) |
             CGEventMask(1 << Self.systemDefinedEventTypeRawValue)
         let context = Unmanaged.passUnretained(self).toOpaque()
         guard let eventTap = CGEvent.tapCreate(
@@ -87,12 +88,6 @@ final class KeyboardEventSuppressor {
         arm(event: nativeEvent, edge: edge)
     }
 
-    /// 直接按 macOS key code 抑制物理按键事件，
-    /// 用于免按模式下抑制 F5（语音键）未被 HID 映射的系统事件。
-    func arm(keyCode: UInt16, edge: RemoteEventEdge) {
-        arm(event: .keyboard(keyCode: keyCode), edge: edge)
-    }
-
     private func arm(event: RemoteNativeEvent, edge: RemoteEventEdge) {
         let now = ProcessInfo.processInfo.systemUptime
         lock.lock()
@@ -115,7 +110,17 @@ final class KeyboardEventSuppressor {
             }
             return false
         }
-        if event.getIntegerValueField(.eventSourceUserData) == KeyboardInjector.syntheticEventMarker {
+        let synthetic = event.getIntegerValueField(.eventSourceUserData) ==
+            KeyboardInjector.syntheticEventMarker
+        if type == .flagsChanged,
+           event.getIntegerValueField(.keyboardEventKeycode) == 0x3E {
+            let edge = event.flags.contains(.maskControl) ? "down" : "up"
+            AppLogger.shared.write(
+                "HID FILTER RIGHT_CTRL observed=true source=\(synthetic ? "synthetic" : "hardware") " +
+                    "edge=\(edge) flags=\(event.flags.rawValue)"
+            )
+        }
+        if synthetic {
             return false
         }
         guard let descriptor = descriptor(type: type, event: event) else { return false }
@@ -131,6 +136,10 @@ final class KeyboardEventSuppressor {
         }
         pendingEvents.remove(at: matchIndex)
         lock.unlock()
+        AppLogger.shared.write(
+            "HID FILTER PHYSICAL suppressed=true type=\(type.rawValue) event=\(String(describing: descriptor.event)) " +
+                "edge=\(String(describing: descriptor.edge))"
+        )
         return true
     }
 

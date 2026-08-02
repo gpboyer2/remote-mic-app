@@ -916,31 +916,6 @@ enum KeyboardInjector {
         postSystemKey(type: 3)
     }
 
-    /// 构造右侧 Control 的修饰键状态变化事件。
-    /// macOS 的 Control、Option、Command、Shift 等修饰键使用 flagsChanged，
-    /// 不能按普通 keyDown/keyUp 事件发送，否则只监听修饰键变化的快捷键无法识别。
-    static func rightControlEvent(keyDown: Bool) -> CGEvent? {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let event = CGEvent(
-                  keyboardEventSource: source,
-                  virtualKey: 0x3E,
-                  keyDown: keyDown
-              )
-        else { return nil }
-        event.type = .flagsChanged
-        event.flags = keyDown ? .maskControl : []
-        event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
-        return event
-    }
-
-    /// 发送一次右侧 Control 短按，用于触发豆包输入法的免按模式。
-    public static func postRightControlTap() {
-        rightControlEvent(keyDown: true)?.post(tap: .cghidEventTap)
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
-            rightControlEvent(keyDown: false)?.post(tap: .cghidEventTap)
-        }
-    }
-
     private static func postSystemKey(type: Int32, isDown: Bool) {
         let keyState = isDown ? 0xA : 0xB
         let data1 = Int((type << 16) | Int32(keyState << 8))

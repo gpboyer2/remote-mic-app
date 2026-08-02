@@ -124,8 +124,12 @@ final class XiaomiBluetoothBridge: NSObject {
     private var pendingSync: (predictor: Int, stepIndex: Int)?
     private var streaming = false
     private var microphoneOpened = false
+    private var voiceInputEnabled = true
     private var sessionID: UInt8 = 0
-    private var lastStopAt: Date?
+    private var audioPacketCount = 0
+    private var decodedFrameCount = 0
+    private var lastAudioDiagnosticAt = Date.distantPast
+    private var lastIgnoredAudioDiagnosticAt = Date.distantPast
 
     private let serviceUUID = CBUUID(string: ATVVProtocol.serviceUUID)
     private let transmitUUID = CBUUID(string: ATVVProtocol.transmitUUID)
@@ -323,10 +327,12 @@ final class XiaomiBluetoothBridge: NSObject {
             delegate?.bluetoothBridgeDidStopVoice(self)
         }
         microphoneOpened = false
+        voiceInputEnabled = true
         sessionID = 0
         accumulator.reset()
         pendingSync = nil
         decoder.reset()
+        lastIgnoredAudioDiagnosticAt = .distantPast
     }
 
     private func scheduleReconnect(discardCachedIdentity: Bool = false) {
@@ -373,21 +379,46 @@ final class XiaomiBluetoothBridge: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
-    private func write(_ data: Data) {
-        guard let peripheral, let transmitCharacteristic else { return }
+    /// 向当前 ATVV 发送通道写入命令，并明确返回命令是否真正提交。
+    @discardableResult
+    private func write(_ data: Data) -> Bool {
+        guard let peripheral, let transmitCharacteristic else {
+            let bytes = data.map { String(format: "%02X", $0) }.joined()
+            AppLogger.shared.write("ERROR ATVV WRITE skipped reason=not_ready bytes=\(bytes)")
+            return false
+        }
         let type: CBCharacteristicWriteType = transmitCharacteristic.properties.contains(.writeWithoutResponse)
             ? .withoutResponse
             : .withResponse
         peripheral.writeValue(data, for: transmitCharacteristic, type: type)
+        return true
     }
 
-    private func closeMicrophoneIfNeeded() {
-        guard microphoneOpened else { return }
-        write(ATVVProtocol.microphoneClose(
-            version: capabilities.version,
-            sessionID: sessionID
-        ))
-        microphoneOpened = false
+    /// 结束语音会话；确定键取消时，立即关闭免按音频入口。
+    /// HID 与蓝牙是两个独立通道，任一通道都可能先到；状态门保证迟到包不会重新打开会话。
+    func closeMicrophoneIfNeeded(blockReopenUntilNextPress: Bool = false) {
+        if blockReopenUntilNextPress {
+            voiceInputEnabled = false
+        }
+        if microphoneOpened {
+            let sent = write(ATVVProtocol.microphoneClose(
+                version: capabilities.version,
+                sessionID: sessionID
+            ))
+            microphoneOpened = false
+            AppLogger.shared.write(
+                "ATVV MIC_CLOSE sent=\(sent) session=\(sessionID) " +
+                    "block_reopen_until_next_press=\(blockReopenUntilNextPress)"
+            )
+        } else if blockReopenUntilNextPress {
+            AppLogger.shared.write("ATVV MIC_CLOSE pending_open_rejected=true")
+        }
+    }
+
+    /// 新的第一次语音键按下到达后，允许 RC003 为这次新会话打开麦克风。
+    func prepareForVoiceStart() {
+        voiceInputEnabled = true
+        AppLogger.shared.write("ATVV VOICE_START allowed=true")
     }
 
     private func requestCapabilitiesIfPossible() {
@@ -409,6 +440,7 @@ final class XiaomiBluetoothBridge: NSObject {
         AppLogger.shared.write("ATVV CAPABILITIES requested name=\(peripheral.name ?? "MI RC")")
     }
 
+    /// 处理 ATVV 控制包；零号假会话不得覆盖真实会话，新会话必须重置解码器。
     private func handleControl(_ data: Data) {
         let bytes = Array(data)
         guard let opcode = bytes.first,
@@ -443,6 +475,10 @@ final class XiaomiBluetoothBridge: NSObject {
                 AppLogger.shared.write("BLE READY name=\(peripheral.name ?? "MI RC")")
             }
         case 0x08:
+            guard voiceInputEnabled || settings.voiceKeyMode == .holdToTalk else {
+                AppLogger.shared.write("ATVV MIC_OPEN rejected reason=hands_free_ok_cancel")
+                return
+            }
             guard ATVVSessionGate.canOpenMicrophone(
                 phase: lifecycle,
                 generation: generation,
@@ -452,13 +488,21 @@ final class XiaomiBluetoothBridge: NSObject {
                 AppLogger.shared.write("ATVV MIC_OPEN ignored_not_ready")
                 return
             }
-            write(ATVVProtocol.microphoneOpen(
+            let sent = write(ATVVProtocol.microphoneOpen(
                 version: capabilities.version,
                 codec: capabilities.selectedCodec
             ))
+            guard sent else {
+                AppLogger.shared.write("ERROR ATVV MIC_OPEN send_failed")
+                return
+            }
             microphoneOpened = true
-            AppLogger.shared.write("ATVV MIC_OPEN request")
+            AppLogger.shared.write("ATVV MIC_OPEN request sent=true")
         case 0x04:
+            guard voiceInputEnabled || settings.voiceKeyMode == .holdToTalk else {
+                AppLogger.shared.write("ATVV STREAM_START rejected reason=hands_free_ok_cancel")
+                return
+            }
             guard ATVVSessionGate.canOpenMicrophone(
                 phase: lifecycle,
                 generation: generation,
@@ -483,8 +527,30 @@ final class XiaomiBluetoothBridge: NSObject {
                 rejectUnsupportedAudio(LocalizedMessage("遥控器切换到了不受支持的 8 kHz 语音编码"))
                 return
             }
-            sessionID = bytes.count >= 4 ? bytes[3] : 0
-            startStreaming()
+            let nextSessionID = bytes.count >= 4 ? bytes[3] : 0
+            guard nextSessionID != 0 else {
+                AppLogger.shared.write(
+                    "ATVV STREAM invalid_zero_start_ignored current_session=\(sessionID) " +
+                        "streaming=\(streaming)"
+                )
+                return
+            }
+            if streaming, nextSessionID == sessionID {
+                AppLogger.shared.write("ATVV STREAM duplicate_start_ignored session=\(sessionID)")
+                return
+            }
+            if streaming {
+                AppLogger.shared.write(
+                    "ATVV STREAM session_replaced previous=\(sessionID) next=\(nextSessionID)"
+                )
+                resetDecoderForNewSession()
+            }
+            sessionID = nextSessionID
+            if streaming {
+                AppLogger.shared.write("ATVV STREAM START session=\(sessionID) decoder_reset=true")
+            } else {
+                startStreaming()
+            }
         case 0x00:
             guard lifecycle.acceptsProtocolData(generation: generation) else { return }
             stopStreaming()
@@ -500,27 +566,39 @@ final class XiaomiBluetoothBridge: NSObject {
         }
     }
 
+    /// 建立新的 ATVV 解码会话并清空上一会话的音频统计。
     private func startStreaming() {
-        accumulator.reset()
-        pendingSync = nil
-        decoder.reset()
-        lastStopAt = nil
-        guard !streaming else { return }
+        resetDecoderForNewSession()
         streaming = true
         delegate?.bluetoothBridgeDidStartVoice(self)
         AppLogger.shared.write("ATVV STREAM START session=\(sessionID)")
     }
 
+    /// 清空上一 ATVV 会话的解码器和统计，不改变当前是否正在向上层报告音频。
+    private func resetDecoderForNewSession() {
+        accumulator.reset()
+        pendingSync = nil
+        decoder.reset()
+        audioPacketCount = 0
+        decodedFrameCount = 0
+        lastAudioDiagnosticAt = .distantPast
+        lastIgnoredAudioDiagnosticAt = .distantPast
+    }
+
+    /// 结束当前 ATVV 解码会话，并记录这一段是否真正收到音频帧。
     private func stopStreaming() {
         guard streaming else { return }
         streaming = false
         accumulator.reset()
         pendingSync = nil
-        lastStopAt = Date()
         delegate?.bluetoothBridgeDidStopVoice(self)
-        AppLogger.shared.write("ATVV STREAM STOP session=\(sessionID)")
+        AppLogger.shared.write(
+            "ATVV STREAM STOP session=\(sessionID) packets=\(audioPacketCount) " +
+                "decoded_frames=\(decodedFrameCount)"
+        )
     }
 
+    /// 解码 ATVV 音频包，并限频记录输入包、解码帧和当前会话编号。
     private func handleAudio(_ data: Data) {
         guard let generation = currentGeneration(),
               ATVVSessionGate.canOpenMicrophone(
@@ -530,18 +608,21 @@ final class XiaomiBluetoothBridge: NSObject {
                 sampleRate: capabilities.sampleRate
               )
         else {
-            AppLogger.shared.write("ATVV AUDIO ignored_not_ready")
+            logIgnoredAudio(reason: "not_ready")
             return
         }
-        if !streaming {
-            if let lastStopAt, Date().timeIntervalSince(lastStopAt) < 0.3 {
-                return
-            }
-            startStreaming()
-            AppLogger.shared.write("ATVV STREAM implicit_audio_race")
+        guard streaming else {
+            logIgnoredAudio(reason: "not_streaming")
+            return
+        }
+        guard voiceInputEnabled || settings.voiceKeyMode == .holdToTalk else {
+            logIgnoredAudio(reason: "voice_closed")
+            return
         }
 
+        audioPacketCount += 1
         let frames = accumulator.append(data, frameSize: capabilities.frameSize)
+        decodedFrameCount += frames.count
         for frame in frames {
             if let pendingSync {
                 decoder.reset(
@@ -554,6 +635,22 @@ final class XiaomiBluetoothBridge: NSObject {
             let samples = PCMPostprocessor.process(decoded, gainDB: settings.gainDB)
             delegate?.bluetoothBridge(self, didDecode: samples)
         }
+        let now = Date()
+        if audioPacketCount == 1 || now.timeIntervalSince(lastAudioDiagnosticAt) >= 1 {
+            lastAudioDiagnosticAt = now
+            AppLogger.shared.write(
+                "ATVV AUDIO session=\(sessionID) packets=\(audioPacketCount) " +
+                    "packet_bytes=\(data.count) decoded_frames=\(decodedFrameCount)"
+            )
+        }
+    }
+
+    /// 被拒绝的连续音频包每秒只记录一次，保留状态证据并避免日志刷屏拖慢主线程。
+    private func logIgnoredAudio(reason: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastIgnoredAudioDiagnosticAt) >= 1 else { return }
+        lastIgnoredAudioDiagnosticAt = now
+        AppLogger.shared.write("ATVV AUDIO ignored reason=\(reason) session=\(sessionID)")
     }
 
     private func rejectUnsupportedAudio(_ message: LocalizedMessage) {
