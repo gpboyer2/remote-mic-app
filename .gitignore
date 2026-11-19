@@ -4,6 +4,11 @@ dist/
 *.xcuserstate
 .DS_Store
 
+# Local build scratch and a vendored copy of Sparkle that no script references
+# (SPM resolves Sparkle into .build/artifacts). Both only add noise to git status.
+.manualbuild/
+Sparkle/
+
 # Local credentials, signing identities, and notarization material.
 .env
 .env.*

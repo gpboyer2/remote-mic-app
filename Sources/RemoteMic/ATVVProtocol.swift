@@ -81,13 +81,17 @@ final class IMAADPCMDecoder {
         27086, 29794, 32767,
     ]
     private static let indexTable = [-1, -1, -1, -1, 2, 4, 6, 8]
+    /// 自适应预测器的合法范围：`Int16` 满幅，与样本同域。
+    private static let predictorRange = AudioSampleMath.int16LowerBound...AudioSampleMath.int16UpperBound
+    /// 步长索引表的合法范围。
+    private static let stepIndexRange = 0...88
 
     private(set) var predictor = 0
     private(set) var stepIndex = 0
 
     func reset(predictor: Int = 0, stepIndex: Int = 0) {
-        self.predictor = min(32_767, max(-32_768, predictor))
-        self.stepIndex = min(88, max(0, stepIndex))
+        self.predictor = AudioSampleMath.clamp(predictor, to: Self.predictorRange)
+        self.stepIndex = AudioSampleMath.clamp(stepIndex, to: Self.stepIndexRange)
     }
 
     func decode(_ data: Data) -> [Int16] {
@@ -108,9 +112,9 @@ final class IMAADPCMDecoder {
         if nibble & 4 != 0 { difference += step }
 
         predictor += nibble & 8 != 0 ? -difference : difference
-        predictor = min(32_767, max(-32_768, predictor))
+        predictor = AudioSampleMath.clamp(predictor, to: Self.predictorRange)
         stepIndex += Self.indexTable[nibble & 7]
-        stepIndex = min(88, max(0, stepIndex))
+        stepIndex = AudioSampleMath.clamp(stepIndex, to: Self.stepIndexRange)
         return Int16(predictor)
     }
 }
@@ -126,12 +130,9 @@ enum PCMPostprocessor {
                 ) >> 2
             }
         }
-        let finiteGainDB = gainDB.isFinite ? gainDB : 0
-        let safeGainDB = min(24.0, max(-24.0, finiteGainDB))
-        let gain = pow(10.0, safeGainDB / 20.0)
+        let gain = pow(10.0, AudioSampleMath.clampGainDB(gainDB) / 20.0)
         return filtered.map { value in
-            let scaled = Int((Double(value) * gain).rounded())
-            return Int16(min(32_767, max(-32_768, scaled)))
+            AudioSampleMath.clampToInt16(Int((Double(value) * gain).rounded()))
         }
     }
 }

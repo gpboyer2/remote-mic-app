@@ -175,6 +175,12 @@ final class VirtualAudioOutput {
     private var engineConfigurationGeneration: UInt64 = 0
     private var rejectedWriteCount = 0
     private var lastRejectedWriteLogDate = Date.distantPast
+    // 会话级写入统计：用来区分“遥控器没声音”“写不进去”“写进去但声卡没消费”三种故障。
+    private var sessionStats = AudioSessionStats()
+    // 会话开始时的播放计数基线。必须在开口时采样，结束后才能算出
+    // “本会话期间设备消费了多少帧”；若只在收尾时采样，两段会话之间的空闲渲染
+    // 也会被算进来，device_frames 永远非零，这个判据就废了。
+    private var consumedBaseline: Int64?
     private let sourceFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: 16_000,
@@ -240,6 +246,29 @@ final class VirtualAudioOutput {
         do {
             engine.prepare()
             try engine.start()
+            // macOS 可能把引擎输出甩回系统默认设备（表现为“按住语音键反而外放”）。
+            // 读得到实际设备就严格校验；读不到（极少数情况）只记一笔，交给开口前的漂移校验兜住。
+            let boundDevice = Self.boundOutputDevice(of: engine)
+            if let boundDevice, boundDevice.id != device.id {
+                player.stop()
+                engine.stop()
+                status = LocalizedMessage(
+                    "语音输出未生效（实际输出：%@）",
+                    arguments: [boundDevice.name]
+                )
+                AppLogger.shared.write(
+                    "AUDIO CONFIGURE failed reason=bind_mismatch " +
+                        "target={\(CoreAudioDeviceCatalog.deviceDiagnostic(device))} " +
+                        "actual={\(CoreAudioDeviceCatalog.deviceDiagnostic(boundDevice))}"
+                )
+                return false
+            }
+            if boundDevice == nil {
+                AppLogger.shared.write(
+                    "AUDIO CONFIGURE unverified reason=current_device_unreadable " +
+                        "target={\(CoreAudioDeviceCatalog.deviceDiagnostic(device))}"
+                )
+            }
             guard AudioPlayerNodeSafety.play(player) else {
                 player.stop()
                 engine.stop()
@@ -253,6 +282,9 @@ final class VirtualAudioOutput {
             self.engine = engine
             self.player = player
             selectedDevice = device
+            // 新引擎的播放计数从零开始，旧基线必须丢弃，
+            // 否则第一次汇总会拿新计数减旧基线，算出负数。
+            consumedBaseline = nil
             observeConfigurationChanges(for: engine)
             status = LocalizedMessage("语音输出：%@", arguments: [device.name])
             AppLogger.shared.write("AUDIO READY target={\(CoreAudioDeviceCatalog.deviceDiagnostic(device))} state={\(diagnosticState())}")
@@ -272,6 +304,29 @@ final class VirtualAudioOutput {
 
     var isReadyForTestTone: Bool {
         selectedDevice != nil && engine?.isRunning == true
+    }
+
+    /// 引擎是否真的渲染在所选设备上。每次开口前必须用它判断，
+    /// 这是 2026-11-04 “按住麦克风键外放、豆包收不到声音” 的复发点。
+    var isBoundToSelectedDevice: Bool {
+        guard let selectedDevice,
+              engine?.isRunning == true,
+              let actual = currentOutputDevice()
+        else { return false }
+        return actual.id == selectedDevice.id
+    }
+
+    /// 语音开始前校验绑定：已绑定直接返回 true；否则按所选 UID 重建引擎。
+    /// 重建失败返回 false，调用方必须停止继续推送音频，绝不退回系统默认输出设备。
+    @discardableResult
+    func ensureBoundToSelectedDevice() -> Bool {
+        if isBoundToSelectedDevice { return true }
+        guard let selectedDevice else { return false }
+        AppLogger.shared.write(
+            "AUDIO BINDING drift expected={\(CoreAudioDeviceCatalog.deviceDiagnostic(selectedDevice))} " +
+                "actual={\(CoreAudioDeviceCatalog.deviceDiagnostic(currentOutputDevice()))}"
+        )
+        return configure(deviceUID: selectedDevice.uid)
     }
 
     /// Schedules the test tone and reports actual playback completion via `scheduleBuffer`'s
@@ -328,11 +383,50 @@ final class VirtualAudioOutput {
             rejectedWriteCount = 0
         }
         player.scheduleBuffer(buffer)
+        sessionStats.recordChunk(byteCount: 0)
+        sessionStats.recordSamples(samples)
         return true
     }
 
+    /// 开口前打一个播放计数基线，用于收尾时计算“本会话期间设备真的消费了多少帧”。
+    /// 读不到就保持 nil：宁可让收尾报 `device_frames=-1`（未知），
+    /// 也不要退回去用上一轮的旧值，算出一个看着正常其实无意义的数。
+    func beginSession() {
+        consumedBaseline = currentConsumedSampleTime()
+    }
+
+    /// 一次语音会话收尾：把“写了多少”和“设备真的消耗了多少”一起落日志。
+    /// `device_frames` 不增长说明声卡那端根本没在拉数据（MiRemoteV IO 卡死的典型特征），
+    /// 此时豆包会打开麦克风却只能读到静音。
     func endSession() {
+        let consumed = consumedFramesSinceSessionStart()
+        if !sessionStats.isEmpty || consumed > 0 {
+            AppLogger.shared.write(
+                "AUDIO WRITE SUMMARY " + sessionStats.summary(chunkLabel: "buffers") +
+                    " device_frames=\(consumed) state={\(basicDiagnosticState())}"
+            )
+        }
+        sessionStats.reset()
+        consumedBaseline = nil
         flushPlayer()
+    }
+
+    private func currentConsumedSampleTime() -> Int64? {
+        guard let player,
+              let nodeTime = player.lastRenderTime,
+              nodeTime.isSampleTimeValid,
+              let playerTime = player.playerTime(forNodeTime: nodeTime)
+        else { return nil }
+        return Int64(playerTime.sampleTime)
+    }
+
+    /// 本会话期间播放节点实际推出去的帧数。读不到基线或读不到计数一律返回 -1：
+    /// 这个判据的价值全在“不骗人”，宁可报未知，也不要用上一轮的旧值算出一个看着正常的数。
+    private func consumedFramesSinceSessionStart() -> Int64 {
+        guard let baseline = consumedBaseline,
+              let current = currentConsumedSampleTime()
+        else { return -1 }
+        return current >= baseline ? current - baseline : current
     }
 
     private func flushPlayer() {
@@ -354,6 +448,7 @@ final class VirtualAudioOutput {
         player = nil
         engine = nil
         selectedDevice = nil
+        consumedBaseline = nil
     }
 
     private func observeConfigurationChanges(for engine: AVAudioEngine) {
@@ -408,7 +503,14 @@ final class VirtualAudioOutput {
     }
 
     private func currentOutputDevice() -> AudioDeviceInfo? {
-        guard let outputUnit = engine?.outputNode.audioUnit else { return nil }
+        guard let engine else { return nil }
+        return Self.boundOutputDevice(of: engine)
+    }
+
+    /// 读取 AUHAL 真正在用的输出设备。`configure` 的绑定校验和每次开口前的漂移校验都以此为准，
+    /// 不能信任 `selectedDevice`（那是我们“希望”的设备，不是引擎“实际”的设备）。
+    private static func boundOutputDevice(of engine: AVAudioEngine) -> AudioDeviceInfo? {
+        guard let outputUnit = engine.outputNode.audioUnit else { return nil }
         var deviceID = AudioDeviceID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         guard AudioUnitGetProperty(
@@ -424,6 +526,7 @@ final class VirtualAudioOutput {
 
     private func logRejectedWrite() {
         rejectedWriteCount += 1
+        sessionStats.recordRejection()
         let now = Date()
         guard now.timeIntervalSince(lastRejectedWriteLogDate) >= 1 else { return }
         lastRejectedWriteLogDate = now

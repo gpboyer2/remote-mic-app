@@ -384,6 +384,67 @@ check(
     "test tone safety gate rejects missing device, active RC003 voice stream, or in-flight playback"
 )
 
+// 音频数学与会话统计。SPM 的 swift-testing 在本机跑不了（xcrun 取不到 PlatformPath），
+// 所以同一批断言在这里再走一遍，保证真跑得到。
+check(
+    AudioSampleMath.magnitude(of: Int16.min) == Int(Int16.max) &&
+        AudioSampleMath.magnitude(of: Int16.max) == Int(Int16.max) &&
+        AudioSampleMath.magnitude(of: -1_234) == 1_234,
+    "audio magnitude treats Int16.min as full scale"
+)
+check(
+    AudioSampleMath.peakMagnitude(of: []) == 0 &&
+        AudioSampleMath.peakMagnitude(of: [0, 0]) == 0 &&
+        AudioSampleMath.peakMagnitude(of: [100, -9_000, 42]) == 9_000 &&
+        AudioSampleMath.peakMagnitude(of: [Int16.min]) == Int(Int16.max),
+    "audio peak handles empty, silent, and full-scale input"
+)
+check(
+    AudioSampleMath.clampToInt16(32_768) == Int16.max &&
+        AudioSampleMath.clampToInt16(-99_999) == Int16.min &&
+        AudioSampleMath.clampToInt16(-32_768) == Int16.min &&
+        AudioSampleMath.clampToInt16(0) == 0,
+    "audio clamp saturates both ends"
+)
+check(
+    AudioSampleMath.clampGainDB(.nan) == 0 &&
+        AudioSampleMath.clampGainDB(.infinity) == 0 &&
+        AudioSampleMath.clampGainDB(30) == 24 &&
+        AudioSampleMath.clampGainDB(-30) == -24 &&
+        AudioSampleMath.clampGainDB(6) == 6,
+    "audio gain clamp rejects non-finite and caps at 24 dB"
+)
+check(
+    AudioSampleMath.clamp(5, to: 0...88) == 5 &&
+        AudioSampleMath.clamp(-3, to: 0...88) == 0 &&
+        AudioSampleMath.clamp(200, to: 0...88) == 88,
+    "audio clamp keeps value inside range"
+)
+
+var audioStats = AudioSessionStats()
+check(audioStats.isEmpty, "audio session stats start empty")
+audioStats.recordChunk(byteCount: 120)
+audioStats.recordFrame()
+audioStats.recordSamples([0, 100, -200])
+check(
+    audioStats.chunks == 1 && audioStats.bytes == 120 && audioStats.frames == 1 &&
+        audioStats.samples == 3 && audioStats.peak == 200 && !audioStats.isEmpty,
+    "audio session stats accumulate chunks, frames, samples, and peak"
+)
+audioStats.recordSamples([10])
+check(audioStats.peak == 200, "audio session peak never decreases")
+audioStats.recordRejection()
+check(audioStats.rejected == 1, "audio session counts rejections separately")
+let packetsSummary = audioStats.summary(chunkLabel: "packets")
+let buffersSummary = audioStats.summary(chunkLabel: "buffers")
+check(
+    packetsSummary.contains("packets=1") && packetsSummary.contains("bytes=120") &&
+        buffersSummary.contains("buffers=1") && buffersSummary.contains("bytes=120"),
+    "audio session summary swaps only the chunk label"
+)
+audioStats.reset()
+check(audioStats.isEmpty && audioStats == AudioSessionStats(), "audio session reset clears every field")
+
 let suiteName = "RemoteMicSelfTest.\(UUID().uuidString)"
 if let defaults = UserDefaults(suiteName: suiteName) {
     let saved = try JSONEncoder().encode([

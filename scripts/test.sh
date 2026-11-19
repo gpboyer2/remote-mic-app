@@ -6,6 +6,8 @@ OUTPUT="$ROOT/.build/self-test/RemoteMicSelfTest"
 
 mkdir -p "${OUTPUT:h}"
 xcrun swiftc \
+  "$ROOT/Sources/RemoteMic/AudioSampleMath.swift" \
+  "$ROOT/Sources/RemoteMic/AudioSessionStats.swift" \
   "$ROOT/Sources/RemoteMic/ATVVProtocol.swift" \
   "$ROOT/Sources/RemoteMic/BluetoothLifecycle.swift" \
   "$ROOT/Sources/RemoteMic/RemoteButtons.swift" \

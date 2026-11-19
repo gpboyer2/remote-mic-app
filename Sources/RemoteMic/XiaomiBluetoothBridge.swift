@@ -126,10 +126,13 @@ final class XiaomiBluetoothBridge: NSObject {
     private var microphoneOpened = false
     private var voiceInputEnabled = true
     private var sessionID: UInt8 = 0
-    private var audioPacketCount = 0
-    private var decodedFrameCount = 0
+    // 语音链路可观测性：遥控器→App 这一段以前完全没有埋点，
+    // 出问题时只能靠猜“是没发音频还是没写进去”。会话内按包/帧/样本累计，
+    // 松手时落一条汇总，用数据区分“没到 / 到了是静音 / 到了有声”。
+    private var audioStats = AudioSessionStats()
     private var lastAudioDiagnosticAt = Date.distantPast
     private var lastIgnoredAudioDiagnosticAt = Date.distantPast
+    private var streamStartedAt: Date?
 
     private let serviceUUID = CBUUID(string: ATVVProtocol.serviceUUID)
     private let transmitUUID = CBUUID(string: ATVVProtocol.transmitUUID)
@@ -568,8 +571,11 @@ final class XiaomiBluetoothBridge: NSObject {
 
     /// 建立新的 ATVV 解码会话并清空上一会话的音频统计。
     private func startStreaming() {
+        // 先判重入再清状态：已开流时再清累加器，会把还没凑满一帧的字节丢掉。
+        guard !streaming else { return }
         resetDecoderForNewSession()
         streaming = true
+        streamStartedAt = Date()
         delegate?.bluetoothBridgeDidStartVoice(self)
         AppLogger.shared.write("ATVV STREAM START session=\(sessionID)")
     }
@@ -579,8 +585,7 @@ final class XiaomiBluetoothBridge: NSObject {
         accumulator.reset()
         pendingSync = nil
         decoder.reset()
-        audioPacketCount = 0
-        decodedFrameCount = 0
+        audioStats.reset()
         lastAudioDiagnosticAt = .distantPast
         lastIgnoredAudioDiagnosticAt = .distantPast
     }
@@ -589,13 +594,19 @@ final class XiaomiBluetoothBridge: NSObject {
     private func stopStreaming() {
         guard streaming else { return }
         streaming = false
+        // 收尾时先取走残留字节，再清空累加器——残留量能证明“包到了但没凑够一帧”。
+        let leftover = accumulator.pending.count
         accumulator.reset()
         pendingSync = nil
+        let elapsed = streamStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         delegate?.bluetoothBridgeDidStopVoice(self)
         AppLogger.shared.write(
-            "ATVV STREAM STOP session=\(sessionID) packets=\(audioPacketCount) " +
-                "decoded_frames=\(decodedFrameCount)"
+            "ATVV STREAM STOP session=\(sessionID) " +
+                "duration=\(String(format: "%.2f", elapsed))s " +
+                audioStats.summary(chunkLabel: "packets") +
+                " leftover_bytes=\(leftover)"
         )
+        streamStartedAt = nil
     }
 
     /// 解码 ATVV 音频包，并限频记录输入包、解码帧和当前会话编号。
@@ -620,9 +631,8 @@ final class XiaomiBluetoothBridge: NSObject {
             return
         }
 
-        audioPacketCount += 1
+        audioStats.recordChunk(byteCount: data.count)
         let frames = accumulator.append(data, frameSize: capabilities.frameSize)
-        decodedFrameCount += frames.count
         for frame in frames {
             if let pendingSync {
                 decoder.reset(
@@ -633,14 +643,17 @@ final class XiaomiBluetoothBridge: NSObject {
             }
             let decoded = decoder.decode(frame)
             let samples = PCMPostprocessor.process(decoded, gainDB: settings.gainDB)
+            audioStats.recordFrame()
+            audioStats.recordSamples(samples)
             delegate?.bluetoothBridge(self, didDecode: samples)
         }
         let now = Date()
-        if audioPacketCount == 1 || now.timeIntervalSince(lastAudioDiagnosticAt) >= 1 {
+        if audioStats.chunks == 1 || now.timeIntervalSince(lastAudioDiagnosticAt) >= 1 {
             lastAudioDiagnosticAt = now
             AppLogger.shared.write(
-                "ATVV AUDIO session=\(sessionID) packets=\(audioPacketCount) " +
-                    "packet_bytes=\(data.count) decoded_frames=\(decodedFrameCount)"
+                "ATVV AUDIO session=\(sessionID) packets=\(audioStats.chunks) " +
+                    "packet_bytes=\(data.count) decoded_frames=\(audioStats.frames) " +
+                    "peak=\(audioStats.peak)"
             )
         }
     }

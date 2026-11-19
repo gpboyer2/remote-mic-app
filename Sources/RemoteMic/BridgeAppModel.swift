@@ -50,6 +50,7 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
     }()
     private var started = false
     private var terminationObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     private let audioPreparationQueue = DispatchQueue(label: "RemoteMic.audioPreparation", qos: .userInitiated)
     private var audioStartupGeneration: UInt64 = 0
     private var audioDeviceRefreshGeneration: UInt64 = 0
@@ -81,6 +82,15 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.stop()
+        }
+        // 睡眠唤醒后 macOS 常把音频引擎甩回系统默认设备，这时必须先重绑再让人开口说话，
+        // 否则声音会外放、豆包也收不到（2026-11-04 的复发场景）。
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleAudioRecovery(reason: "system_wake")
         }
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -121,6 +131,10 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
         if let terminationObserver {
             NotificationCenter.default.removeObserver(terminationObserver)
             self.terminationObserver = nil
+        }
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
         }
         AppLogger.shared.write("APP STOP")
     }
@@ -578,6 +592,18 @@ final class BridgeAppModel: ObservableObject, XiaomiBluetoothBridgeDelegate {
             statusMessage: LocalizedMessage("RC003 语音进行中，已拒绝测试音"),
             logReason: "voice_start"
         )
+        // 开口前先校验音频绑定：引擎可能已被 macOS 甩回系统默认设备（外放 + 豆包收不到）。
+        // 这一步失败就置为不可用，后续 enqueue 会被拒绝，不会把声音播到扬声器。
+        let bound = audioOutput.ensureBoundToSelectedDevice()
+        // 绑定确认之后再打统计基线，否则重绑会把计数清零，这一轮的 device_frames 就没意义了。
+        if bound {
+            audioOutput.beginSession()
+        }
+        AppLogger.shared.write(
+            "AUDIO VOICE SESSION begin bound=\(bound) state={\(audioOutput.diagnosticState())}"
+        )
+        isAudioOutputReady = audioOutput.isReadyForTestTone
+        audioStatus = audioOutput.status
         if settings.voiceKeyMode == .holdToTalk, voiceSessionStartedAt == nil {
             settings.recordButtonPress()
             voiceSessionStartedAt = Date()
