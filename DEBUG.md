@@ -456,47 +456,52 @@ AUDIO CONFIGURE failed reason=bind_mismatch   # 重建失败（此时应无声�
 - 长跑进程（App、豆包、甚至 coreaudiod）都要先看 `etime`；豆包 > 1 天先重启再谈别的（这一步 30 秒，能省掉一整轮误判）。
 
 
-# 语音链路「能唤醒但不转文字」：虚拟声卡被静音（2026-11-19）
+
+# 虚拟设备链路异常：先怀疑「谁动过它」，再怀疑自己的代码（2026-11-19）
 
 ## 现象
 
-- 按住遥控器能唤起豆包输入法，但一个字都不出。
-- RemoteMic 侧日志全绿：`ATVV STREAM START`、`AUDIO WRITE SUMMARY samples=41520 peak=17857 device_frames=44023`。
-- coreaudiod 里豆包确实在 MiRemoteV 上开了录音（`on behalf of <doubao pid>`）。
-- 豆包自己报 `FindAvailableStream service is not ready`，离线模型 `notDownloaded`。
+按住遥控器能唤起豆包输入法，但一个字都不出。RemoteMic 日志全绿
+（`ATVV STREAM`、`samples=41520 peak=17857`），豆包也确实在 MiRemoteV 上开了录音。
 
-## 根因
+## 这次走错的路
 
-**不是音频代码，也不是豆包服务**：另一个工具 auto-mute 在午睡时段把 `MiRemoteV 2ch`
-当普通输出设备静音了（`muted=True`）。MiRemoteV 是虚拟环回声卡，静音等于把
-RemoteMic 写入 → 豆包读取的整条通路掐断。
+第一反应是「音频代码/驱动坏了」，于是去查 ffmpeg、AUHAL、IOProc、驱动 ABI，
+绕了两个小时。真正的原因不在这一层。
 
-决定性验证（单 IOProc 同写同读）：
+## 正确的第一问
 
-```
-写 1kHz（幅度 0.5）→ 读回 0.0        # muted=True
-解除静音后同一测试 → 读回 -17.3 dBFS  # muted=False
-```
+**这个虚拟设备，最近有没有被别的软件动过？**
 
-## 下次一眼判据（10 秒）
+MiRemoteV 不是物理声卡，它是一条软件通路。任何能改设备状态的工具
+（静音工具、音量工具、音频路由、会议软件、远程桌面）都可能把它掐断。
 
-```bash
-# 虚拟声卡的 muted 必须为 false
-cd "/Users/peng/Library/Application Support/auto-mute" && ./mutectl snapshot \
-  | python3 -c "import json,sys;[print(d['name'],d['muted'],d['volume']) for d in json.load(sys.stdin)['devices']]"
-```
+## 通用排查顺序（虚拟声卡 / 虚拟键盘 / 虚拟蓝牙都适用）
 
-若 MiRemoteV / BlackHole / Oray 出现 `muted=True`，先解除再谈别的：
+1. **状态位**：设备当前是 muted / disabled / disconnected 吗？
+   - 声卡：`muted`、`volume`
+   - 键盘：HID 映射是否被改写、事件是否被拦截
+   - 蓝牙：连接是否被别的 App 抢走
+2. **谁在改它**：有没有常驻工具、LaunchAgent、定时任务在操作这类设备？
+3. **最近变化**：新装的工具、改过的配置、跑过的脚本。
+4. **才轮到自己的代码**：日志、数据面、驱动、系统。
 
-```bash
-./mutectl apply '{"devices":[{"uid":"MiRemoteV2ch_UID","muted":false}]}'
-```
+## 本次实例（只作为证据，不作为唯一答案）
+
+`mutectl snapshot` 显示 `MiRemoteV 2ch: muted=True`；解除后，同一段写入的环回
+从 `0` 恢复到 `-17.3 dBFS`。改它的是另一个常驻工具 auto-mute 的「静音全部输出设备」。
+
+## 举一反三
+
+| 虚拟设备 | 可能被谁影响 | 先查什么 |
+|---|---|---|
+| 虚拟声卡（MiRemoteV / BlackHole） | 静音工具、音量工具、音频路由、会议软件 | `muted` / `volume` / 谁在写它 |
+| 虚拟键盘（HID 注入 / 映射） | 键盘增强工具、自动化脚本、输入法 | 映射表、事件是否被拦截 |
+| 虚拟蓝牙（BLE 桥接） | 蓝牙管理工具、耳机切换、其他 App 的连接 | 连接归属、是否被抢 |
+| 虚拟摄像头 | OBS、会议软件、虚拟背景工具 | 是否被独占 |
 
 ## 教训
 
-1. **先查最贴近现象的状态位**。这次绕了 2 小时在 ffmpeg、AUHAL、IOProc、驱动 ABI 上，
-   而根因只是设备表里一个 `muted=True`。顺序应该是：设备静音状态 → 数据面回环 → 驱动 → 系统。
-2. **不要在故障链路上做变量切换**。中途把 RemoteMic 输出改到 BlackHole 做对照，
-   等于在故障链路上又加了一个变量，反而延长了定位。
-3. **「静音全部输出设备」必须排除虚拟声卡**。MiRemoteV / BlackHole / Oray 是音频通路，
-   不是扬声器；任何全量静音逻辑都要有白名单。
+1. 虚拟设备是「共享资源」，不是「我的私有外设」。先问谁动过它。
+2. 先查状态位（10 秒），再查数据面（分钟），最后查驱动/系统（小时）。
+3. 不要在故障链路上做变量切换——那是在给自己加变量。
