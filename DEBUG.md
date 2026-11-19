@@ -455,3 +455,48 @@ AUDIO CONFIGURE failed reason=bind_mismatch   # 重建失败（此时应无声�
 - "外放"这种听感现象，**不要从 App 界面/设置里找原因**：界面显示的是"希望绑定"的设备，只有进程级 IO 断言（`pmset -g assertions` / `on behalf of <pid>`）能证明"实际渲染到哪"。
 - 长跑进程（App、豆包、甚至 coreaudiod）都要先看 `etime`；豆包 > 1 天先重启再谈别的（这一步 30 秒，能省掉一整轮误判）。
 
+
+# 语音链路「能唤醒但不转文字」：虚拟声卡被静音（2026-11-19）
+
+## 现象
+
+- 按住遥控器能唤起豆包输入法，但一个字都不出。
+- RemoteMic 侧日志全绿：`ATVV STREAM START`、`AUDIO WRITE SUMMARY samples=41520 peak=17857 device_frames=44023`。
+- coreaudiod 里豆包确实在 MiRemoteV 上开了录音（`on behalf of <doubao pid>`）。
+- 豆包自己报 `FindAvailableStream service is not ready`，离线模型 `notDownloaded`。
+
+## 根因
+
+**不是音频代码，也不是豆包服务**：另一个工具 auto-mute 在午睡时段把 `MiRemoteV 2ch`
+当普通输出设备静音了（`muted=True`）。MiRemoteV 是虚拟环回声卡，静音等于把
+RemoteMic 写入 → 豆包读取的整条通路掐断。
+
+决定性验证（单 IOProc 同写同读）：
+
+```
+写 1kHz（幅度 0.5）→ 读回 0.0        # muted=True
+解除静音后同一测试 → 读回 -17.3 dBFS  # muted=False
+```
+
+## 下次一眼判据（10 秒）
+
+```bash
+# 虚拟声卡的 muted 必须为 false
+cd "/Users/peng/Library/Application Support/auto-mute" && ./mutectl snapshot \
+  | python3 -c "import json,sys;[print(d['name'],d['muted'],d['volume']) for d in json.load(sys.stdin)['devices']]"
+```
+
+若 MiRemoteV / BlackHole / Oray 出现 `muted=True`，先解除再谈别的：
+
+```bash
+./mutectl apply '{"devices":[{"uid":"MiRemoteV2ch_UID","muted":false}]}'
+```
+
+## 教训
+
+1. **先查最贴近现象的状态位**。这次绕了 2 小时在 ffmpeg、AUHAL、IOProc、驱动 ABI 上，
+   而根因只是设备表里一个 `muted=True`。顺序应该是：设备静音状态 → 数据面回环 → 驱动 → 系统。
+2. **不要在故障链路上做变量切换**。中途把 RemoteMic 输出改到 BlackHole 做对照，
+   等于在故障链路上又加了一个变量，反而延长了定位。
+3. **「静音全部输出设备」必须排除虚拟声卡**。MiRemoteV / BlackHole / Oray 是音频通路，
+   不是扬声器；任何全量静音逻辑都要有白名单。

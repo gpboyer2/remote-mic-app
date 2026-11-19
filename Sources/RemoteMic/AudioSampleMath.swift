@@ -32,6 +32,15 @@ enum AudioSampleMath {
         return peak
     }
 
+    /// 把 `Int16` 样本归一化到 `[-1, 1]` 的 `Float`，供播放侧写缓冲使用。
+    ///
+    /// 以前这行换算直接写在 `AudioOutput.makeBuffer` 里；和 `magnitude` 放在一起，
+    /// 是为了让「读峰值」和「写缓冲」用同一个满幅基准，不会一处除 `Int16.max`、
+    /// 另一处除 `32768`。
+    static func normalizedFloat(of sample: Int16) -> Float {
+        Float(sample) / Float(int16UpperBound)
+    }
+
     /// 把任意整数饱和到 `Int16` 范围内，用于浮点缩放后的落回。
     static func clampToInt16(_ value: Int) -> Int16 {
         Int16(min(int16UpperBound, max(int16LowerBound, value)))

@@ -366,7 +366,7 @@ final class VirtualAudioOutput {
         else { return nil }
 
         for index in samples.indices {
-            channel[index] = Float(samples[index]) / Float(Int16.max)
+            channel[index] = AudioSampleMath.normalizedFloat(of: samples[index])
         }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         return buffer
