@@ -36,7 +36,16 @@ done
 cp "$SRC/launchd/"*.plist "$BASE/launchd/"
 chmod 755 "$BASE"/*.sh
 
-echo "==> 3/3 安装并加载 LaunchAgent"
+echo "==> 3/3 生成中文名外壳并加载 LaunchAgent"
+# launchd 在「登录项 — 允许在后台」里显示的是可执行文件名。
+# 直接跑 /bin/bash 会显示成 bash，用户会当成来路不明的脚本关掉。
+write_wrapper() {
+  local wrapper="$1" target="$2"
+  printf '#!/bin/bash\n# 显示名外壳：让后台项显示中文名，而不是 bash。\nexec /bin/bash "%s"\n' "$BASE/$target" > "$BASE/$wrapper"
+  chmod 755 "$BASE/$wrapper"
+}
+write_wrapper "虚拟声卡静音守卫" "mute-guard.sh"
+write_wrapper "无线麦环回检测" "watchdog.sh"
 for label in "${LABELS[@]}"; do
   target="$AGENTS/$label.plist"
   # 模板里的 __BASE__ 换成实际运行时路径，避免两处各写一份 plist

@@ -2,16 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.peng.miremote-watchdog</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>__BASE__/watchdog.sh</string>
-  </array>
-  <key>StartInterval</key><integer>600</integer>
-  <key>RunAtLoad</key><true/>
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>__BASE__/watchdog.stdout.log</string>
-  <key>StandardErrorPath</key><string>__BASE__/watchdog.stdout.log</string>
+	<key>Label</key>
+	<string>com.peng.miremote-watchdog</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__BASE__/无线麦环回检测</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>__BASE__/watchdog.stdout.log</string>
+	<key>StandardOutPath</key>
+	<string>__BASE__/watchdog.stdout.log</string>
+	<key>StartInterval</key>
+	<integer>600</integer>
 </dict>
 </plist>

@@ -59,6 +59,17 @@ sudo bash tools/remote-mic-watchdog/install-helper.sh
 `-170dB` 以下判为 **unknown**，只记日志、不触发恢复：那是「没有样本」，
 不是「环回坏了」。宁可不动，也不要在测不准的时候做不可逆动作。
 
+## 为什么后台项里显示中文名
+
+macOS 的「登录项 — 允许在后台」显示的是**可执行文件名**，不是 plist 的 Label。
+直接跑 `/bin/bash` 就会显示成 `bash`，用户看到一堆 bash/sh/ssh 会当成病毒关掉。
+
+所以安装时会在运行时目录生成两个中文名外壳（`虚拟声卡静音守卫`、`无线麦环回检测`），
+plist 的 `ProgramArguments` 指向外壳，外壳再 `exec` 真正的脚本。
+重装不会退回 bash 名——外壳与 plist 都由 `install.sh` 生成。
+
+注意：改名只能解决「看不懂」，消不掉「身份不明的开发者」提示；那需要 Developer ID 签名。
+
 ## 排查「豆包弹出浮窗但不出字」
 
 顺序固定，不要反过来：
