@@ -24,6 +24,26 @@
 
 应用不会自动修改系统默认输入或输出，因此无线麦和目标应用必须选择同一设备。
 
+## 豆包弹出语音浮窗，但一个字都不出
+
+先查最贴近现象的状态位：`MiRemoteV 2ch` 是否被静音了。虚拟声卡一旦被静音，
+写进去的语音读不出来，表现就是"浮窗正常、上网正常、就是不出字"。
+
+```bash
+# 看输入/输出侧是否 MUTED
+"$HOME/Library/Application Support/RemoteMicWatchdog/bin/miremote-unmute" MiRemoteV2ch_UID
+```
+
+`before=1` 说明当时就是静音的，命令会顺手解除。
+
+2026-11-21 的复发原因值得记住：macOS 会把设备静音状态持久化到
+`/Library/Preferences/Audio/com.apple.audio.DeviceSettings.plist`，
+重启后 coreaudiod 按那份状态恢复，所以"重启就好了"是不成立的——**重启正好会把静音装回去**。
+现在由 `mute-guard.sh`（LaunchAgent `com.peng.miremote-mute-guard`，开机即跑、每 60 秒巡检）
+自动解除三个虚拟声卡的静音，日志在 `RemoteMicWatchdog/mute-guard.log`。
+
+排查顺序也要纠正：不要先从 ffmpeg、AUHAL、驱动 ABI 往下挖，那些是"环回真的坏了"才需要看的。
+
 ## QuickTime 有电平，豆包没有反应
 
 这通常表示遥控器和音频链路已经工作，但豆包没有使用普通虚拟音频设备。
