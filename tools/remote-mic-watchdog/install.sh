@@ -17,7 +17,7 @@ BASE="$HOME/Library/Application Support/RemoteMicWatchdog"
 AGENTS="$HOME/Library/LaunchAgents"
 CURRENT_UID="$(id -u)"
 LABELS=(com.peng.miremote-mute-guard com.peng.miremote-watchdog)
-FILES=(build.sh lib-lock.sh watchdog.sh mute-guard.sh install-helper.sh uninstall-helper.sh)
+FILES=(build.sh lib.sh watchdog.sh mute-guard.sh install-helper.sh uninstall-helper.sh)
 SWIFT_FILES=(CoreAudioDevice.swift probe.swift unmute.swift level.swift)
 
 mkdir -p "$BASE/bin" "$BASE/launchd" "$AGENTS"
