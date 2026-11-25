@@ -10,6 +10,8 @@
 #   - 只解除静音，不改音量、不碰物理设备、不动默认设备；
 #   - 只在真有变化时写日志，避免每 60 秒刷一行；
 #   - 命中设备写死，不接受参数，不能当成通用音频改动工具。
+#
+# 通用能力（日志、轮转、锁、状态文件）一律走 lib.sh，与 watchdog.sh 共用一份实现。
 set -u
 
 BASE="$HOME/Library/Application Support/RemoteMicWatchdog"
@@ -19,9 +21,9 @@ STATE="$BASE/mute-guard.state"
 DEVICES=("MiRemoteV2ch_UID" "BlackHole2ch_UID" "OrayVirtualAudioDevice_UID")
 
 mkdir -p "$BASE"
-# shellcheck source=lib-lock.sh
-source "$BASE/lib-lock.sh"
-log() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG"; }
+# shellcheck source=lib.sh
+source "$BASE/lib.sh"
+log() { log_timed "$LOG" "$*"; }
 
 [ -x "$BIN" ] || { log "SKIP 工具缺失 path=$BIN"; exit 2; }
 
@@ -30,10 +32,7 @@ if ! acquire_single_instance "$BASE" mute; then
   exit 0
 fi
 
-# 日志轮转：超过 256KB 留最后 1000 行
-if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; then
-  tail -1000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-fi
+rotate_log "$LOG" 262144 1000
 
 changed=""
 for uid in "${DEVICES[@]}"; do
@@ -50,10 +49,9 @@ done
 if [ -n "$changed" ]; then
   log "UNMUTE$changed"
   # 记录连续命中，便于看出是「一次性残留」还是「有进程在反复静音」
-  hits=0
-  [ -f "$STATE" ] && hits=$(cat "$STATE" 2>/dev/null || echo 0)
+  hits=$(state_read_int "$STATE" 0)
   hits=$((hits + 1))
-  printf '%s' "$hits" > "$STATE"
+  state_write_int "$STATE" "$hits"
   [ "$hits" -ge 3 ] && log "REPEAT 已累计解除 $hits 次，说明有进程在反复静音虚拟声卡，需要查来源"
 fi
 
