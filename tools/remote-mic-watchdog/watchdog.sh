@@ -1,10 +1,11 @@
 #!/bin/bash
-# miremote-watchdog —— 检测 MiRemoteV 虚拟声卡是否还在环回；卡死则分级恢复。
+# miremote-watchdog —— 检测 MiRemoteV 虚拟声卡是否还在环回、豆包流式通道是否还活；卡死则分级恢复。
 #
 # 设计原则：
 #   1. 只做检测与编排，音频动作交给 miremote-probe 与 miremote-level；
 #   2. 恢复分级：L2 重启驱动宿主 → L3 重启 coreaudiod（都需一次 sudo 安装的 helper）；
-#   3. 每次动作都落结构化日志，下次一眼能看出「什么时候、因为什么、做了什么」。
+#   3. 每次动作都落结构化日志，下次一眼能看出「什么时候、因为什么、做了什么」；
+#   4. 通用能力（日志、进程时间、状态文件、单实例锁）一律走 lib.sh，本文件只留业务判定。
 #
 # 为什么不再用 ffmpeg 判环回：它的 avfoundation 输入对这两个虚拟设备一律报 -91dB，
 # 环回健康时也是假阴性；装了 helper 后会照着假阴性去杀驱动宿主，等于制造故障。
@@ -23,15 +24,21 @@ HELPER="/usr/local/bin/miremote-audio-fix"
 COOLDOWN_SECONDS=1800   # 两次 root 级修复之间至少 30 分钟
 THRESHOLD_DB=-50        # 回读峰值高于这个值才算「环回正常」
 
-mkdir -p "$BASE"
-# shellcheck source=lib-lock.sh
-source "$BASE/lib-lock.sh"
-log() { printf '[%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG"; }
+# ---- 豆包流式自愈参数 ----
+DOUBAO_PROCESS="DoubaoIme"
+DOUBAO_WS_MARKER="audio-ime-ws"
+DOUBAO_CLASH_SOCK="${MIREMOTE_CLASH_SOCK:-/tmp/verge/verge-mihomo.sock}"
+DOUBAO_GRACE_SECONDS=3600      # 冷启动期：ws 本来就还没建起来，不判故障
+DOUBAO_MISS_THRESHOLD=2        # 连续两轮缺失才动手，避免网络瞬断误杀
+DOUBAO_IDLE_MIN_SECONDS=60     # 用户正在操作时只记 deferred，不打断打字
+DOUBAO_STATE="$BASE/doubao-stream.state"
 
-# 日志轮转：超过 1MB 留最后 2000 行
-if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 1048576 ]; then
-  tail -2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-fi
+mkdir -p "$BASE"
+# shellcheck source=lib.sh
+source "$BASE/lib.sh"
+log() { log_timed "$LOG" "$*"; }
+
+rotate_log "$LOG" 1048576 2000
 
 # 返回 0=正常，1=卡死，2=环境异常（找不到设备/工具/权限）
 check_loopback() {
@@ -83,9 +90,96 @@ save_root_fix() {
   printf '{"lastRootFix":%s,"lastFixAt":"%s"}\n' "$now" "$(date '+%Y-%m-%dT%H:%M:%S%z')" > "$STATE"
 }
 
+# ---- 豆包流式 ASR 通道自愈（2026-11-25 实战） ----
+# 现象：豆包进「识别中」却一个字不出。根因不是遥控器/虚拟声卡，而是豆包连跑两天后
+# 流式 ASR 的 audio-ime-ws WebSocket 掉了，只剩批量通道。重启豆包即恢复。
+# 判据：Clash 连接表里有没有这条 ws；连续两轮缺失、且用户不在操作时才重启。
+
+# 0=有 ws，1=没有 ws，2=无法判断（Clash 不在 / 查询失败 / 没有具体域名，不能只凭 IP 猜）
+doubao_audio_ws_state() {
+  local json
+  [ -S "$DOUBAO_CLASH_SOCK" ] || return 2
+  json=$(curl -s --max-time 3 --unix-socket "$DOUBAO_CLASH_SOCK" \
+    "http://localhost/connections" 2>/dev/null) || return 2
+  [ -n "${json:-}" ] || return 2
+  printf '%s' "$json" | grep -q "$DOUBAO_WS_MARKER"
+}
+
+# 重启豆包并等它回来。返回 0 表示拿到了新 PID 且流程码齐全，1 表示没拉起来。
+restart_doubao() {
+  local pid="$1" newpid
+  kill "$pid" 2>/dev/null || return 1
+  sleep 3
+  newpid=$(proc_pid "$DOUBAO_PROCESS")
+  if [ -z "${newpid:-}" ]; then
+    log "DOUBAO RECOVER failed reason=not_relaunched"
+    return 1
+  fi
+  printf '%s\n' "$newpid"
+}
+
+check_doubao_stream() {
+  local pid up rc miss idle
+  pid=$(proc_pid "$DOUBAO_PROCESS")
+  if [ -z "${pid:-}" ]; then
+    log "DOUBAO skipped reason=not_running"
+    return 0
+  fi
+
+  # 取不到运行时长 = 未知，不是「刚启动」。未知时跳过判定，避免把未知当成 0 反复重启。
+  if ! up=$(proc_uptime_seconds "$pid"); then
+    log "DOUBAO skipped reason=uptime_unknown pid=$pid"
+    return 0
+  fi
+  if [ "$up" -lt "$DOUBAO_GRACE_SECONDS" ]; then
+    log "DOUBAO skipped reason=startup_grace uptime=${up}s pid=$pid"
+    return 0
+  fi
+
+  doubao_audio_ws_state; rc=$?
+  if [ "$rc" -eq 2 ]; then
+    log "DOUBAO skipped reason=clash_unavailable pid=$pid"
+    return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
+    state_write_int "$DOUBAO_STATE" 0
+    log "DOUBAO stream=ok pid=$pid uptime=${up}s"
+    return 0
+  fi
+
+  miss=$(state_read_int "$DOUBAO_STATE" 0)
+  miss=$((miss + 1))
+  state_write_int "$DOUBAO_STATE" "$miss"
+  log "DOUBAO stream=missing pid=$pid uptime=${up}s miss=${miss}/${DOUBAO_MISS_THRESHOLD}"
+
+  if [ "$miss" -lt "$DOUBAO_MISS_THRESHOLD" ]; then
+    return 1
+  fi
+
+  # 读不到空闲时间时按「正在操作」处理：宁可多等一轮，也不在你打字时掐掉输入法。
+  if ! idle=$(hid_idle_seconds); then
+    log "DOUBAO RECOVER deferred reason=idle_unknown"
+    return 1
+  fi
+  if awk -v i="$idle" -v t="$DOUBAO_IDLE_MIN_SECONDS" 'BEGIN{exit !(i < t)}'; then
+    log "DOUBAO RECOVER deferred reason=user_active idle=${idle}s"
+    return 1
+  fi
+
+  log "DOUBAO RECOVER restart pid=$pid reason=audio_ime_ws_missing miss=${miss}"
+  local newpid
+  if newpid=$(restart_doubao "$pid"); then
+    state_write_int "$DOUBAO_STATE" 0
+    log "DOUBAO RECOVER done new_pid=${newpid}（下一轮复查 ws）"
+  else
+    return 1
+  fi
+  return 0
+}
+
 restart_app() {
   local pid
-  pid=$(pgrep -x RemoteMic | head -1)
+  pid=$(proc_pid RemoteMic)
   if [ -n "${pid:-}" ]; then
     kill "$pid" 2>/dev/null
     sleep 2
@@ -96,6 +190,9 @@ restart_app() {
 
 main() {
   local result rc
+
+  # 豆包流式通道自愈先跑：它不碰音频，失败也不影响后面的环回检测。
+  check_doubao_stream || true
 
   # 第一步永远先看静音状态位：它不需要音频权限，也是 2026-11/19 两次事故的真实根因。
   [ -x "$UNMUTE" ] && "$UNMUTE" "$DEVICE_UID" input >/dev/null 2>&1

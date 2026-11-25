@@ -1,6 +1,6 @@
 # remote-mic-watchdog
 
-Remote Mic 的运维小工具集：检测虚拟声卡是否被静音、环回是否还通，并在出问题时分级恢复。
+Remote Mic 的运维小工具集：检测虚拟声卡是否被静音、环回是否还通、豆包流式 ASR 通道是否还在，并在出问题时分级恢复。
 
 ## 为什么单独放在这里
 
@@ -80,6 +80,26 @@ plist 的 `ProgramArguments` 指向外壳，外壳再 `exec` 真正的脚本。
 4. 最后才是驱动 ABI、ffmpeg、AUHAL 这些底层。
 
 2026-11-19 那次绕了两个小时，就是跳过了第 1 步。
+
+## 豆包流式通道自愈（2026-11-25）
+
+现象：豆包进「识别中」却一个字不出。遥控器、BLE、虚拟声卡、环回探针全绿，
+豆包也确实在 MiRemoteV 上开了麦——问题不在前三层。
+
+根因：豆包连跑约两天后，流式 ASR 的 `audio-ime-ws` WebSocket 掉了，只剩批量通道；
+重启豆包重建这条 ws 即恢复。判据在 Clash 连接表：正常时能看到
+`frontier5-audio-ime-ws-lf.doubao.com`，故障时只剩 `frontier-ime` 与 `ark`。
+
+`watchdog.sh` 每轮先查一次：
+
+- Clash 不在或查不到 → 记 `DOUBAO skipped reason=clash_unavailable`，不动；
+- 豆包启动不足 1 小时 → 记 `startup_grace`，不动（冷启动期 ws 本来就还没建）；
+- `audio-ime-ws` 在 → 记 `DOUBAO stream=ok`；
+- 连续两轮缺失 → 若 HID 空闲 ≥ 60 秒才 `kill` 豆包（launchd 自动拉起），
+  否则记 `DOUBAO RECOVER deferred reason=user_active`，下一轮再试。
+
+Clash 的 unix socket 默认 `/tmp/verge/verge-mihomo.sock`，可用
+`MIREMOTE_CLASH_SOCK` 覆盖。
 
 ## 边界
 
